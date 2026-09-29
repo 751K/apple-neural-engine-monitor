@@ -22,11 +22,6 @@ This builds two binaries in `.build/make/`:
 - **`anebench`**, a small tool that generates convolution models and runs
   them on the ANE. The calibration scripts use it for their test workloads.
 
-The only requirement is the Xcode Command Line Tools. The Makefile calls
-`clang` and `swiftc` directly. A `Package.swift` is included,
-but SwiftPM fails to link manifests with the Command Line Tools on this machine
-(macOS 27), so the Makefile is the supported path.
-
 ## Metrics
 
 | Field | Meaning | Source | Needs root |
