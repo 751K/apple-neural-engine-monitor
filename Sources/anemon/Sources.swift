@@ -61,14 +61,19 @@ final class ANECounters {
         guard let r = anemon_ior_open() else { return nil }
         ior = r
         var a: UInt64 = 0, b: UInt64 = 0, c: UInt64 = 0
-        _ = anemon_ior_sample(ior, &a, &b, &c)
+        var found: Int32 = 0
+        _ = anemon_ior_sample(ior, &a, &b, &c, &found)
     }
 
-    /// Byte and interrupt deltas since the previous call.
-    func sample() -> (read: UInt64, write: UInt64, interrupts: UInt64)? {
+    /// Byte and interrupt deltas since the previous call. A counter whose
+    /// channels do not exist on this chip is nil rather than zero.
+    func sample() -> (read: UInt64?, write: UInt64?, interrupts: UInt64?)? {
         var rd: UInt64 = 0, wr: UInt64 = 0, irq: UInt64 = 0
-        guard anemon_ior_sample(ior, &rd, &wr, &irq) == 0 else { return nil }
-        return (rd, wr, irq)
+        var found: Int32 = 0
+        guard anemon_ior_sample(ior, &rd, &wr, &irq, &found) == 0 else { return nil }
+        let dram = found & Int32(ANEMON_IOR_DRAM) != 0
+        let ints = found & Int32(ANEMON_IOR_INTERRUPTS) != 0
+        return (dram ? rd : nil, dram ? wr : nil, ints ? irq : nil)
     }
 
     deinit { anemon_ior_close(ior) }

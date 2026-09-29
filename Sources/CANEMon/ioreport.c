@@ -77,8 +77,9 @@ anemon_ior *anemon_ior_open(void) {
     return r;
 }
 
-int anemon_ior_sample(anemon_ior *r, uint64_t *rd, uint64_t *wr, uint64_t *irqs) {
+int anemon_ior_sample(anemon_ior *r, uint64_t *rd, uint64_t *wr, uint64_t *irqs, int *found) {
     *rd = *wr = *irqs = 0;
+    *found = 0;
     CFDictionaryRef cur = r->create_samples(r->sub, r->subbed, NULL);
     if (!cur) return -1;
     if (!r->prev) {
@@ -100,6 +101,7 @@ int anemon_ior_sample(anemon_ior *r, uint64_t *rd, uint64_t *wr, uint64_t *irqs)
         cfstr(r->name(ch), name, sizeof name);
         // DCS = DRAM controller side; the AF (fabric) counters overlap with it.
         if (strcmp(grp, "AMC Stats") == 0 && has_prefix_ci(name, "ANE DCS ")) {
+            *found |= ANEMON_IOR_DRAM;
             int64_t v = r->int_value(ch, 0);
             if (v <= 0) continue;
             size_t len = strlen(name);
@@ -107,6 +109,7 @@ int anemon_ior_sample(anemon_ior *r, uint64_t *rd, uint64_t *wr, uint64_t *irqs)
             else if (len >= 2 && strcmp(name + len - 2, "WR") == 0) *wr += (uint64_t)v;
         } else if (strncmp(grp, "Interrupt Statistics", 20) == 0 && has_prefix_ci(sub, "ane ") &&
                    strstr(name, "First Level Interrupt Handler Count")) {
+            *found |= ANEMON_IOR_INTERRUPTS;
             int64_t v = r->int_value(ch, 0);
             if (v > 0) *irqs += (uint64_t)v;
         }

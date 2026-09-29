@@ -63,7 +63,9 @@ final class TUI {
         })
     }
 
-    func render(_ s: Snapshot, device: DeviceInfo, traceNote: String?, powerAvailable: Bool) {
+    func render(_ s: Snapshot, monitor: Monitor) {
+        let device = monitor.device
+        let (maxW, maxMeasured) = monitor.powerScaleW
         let w = min(width, 100)
         let barW = max(10, w - 44)
         if history.count < s.busyPct.count { history += Array(repeating: [], count: s.busyPct.count - history.count) }
@@ -75,10 +77,26 @@ final class TUI {
         var o = "\(esc)H\(esc)2J"
         o += "\(esc)1manemon\(esc)0m  Apple Neural Engine monitor   \(esc)2m\(device.chip) · \(device.architecture) · \(device.cores) cores · \(df.string(from: s.time))\(esc)0m\n"
         o += String(repeating: "─", count: w) + "\n"
+        if !monitor.isValidated {
+            let os = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+            if monitor.profile == nil {
+                o += "\(esc)33m! \(device.architecture) / macOS \(os) not calibrated: run `sudo anemon calibrate` once\(esc)0m\n"
+            } else {
+                o += "\(esc)33m! busy % failed calibration on \(device.architecture) / macOS \(os): figures may be wrong\(esc)0m\n"
+            }
+        }
 
-        if let note = traceNote {
+        if let note = monitor.traceError {
             o += "\(esc)33m! busy %: \(note)\(esc)0m\n"
+        } else if s.busyStatus == .unsupported {
+            o += "\(esc)33mANE busy   not available: IOReport shows ANE activity, but no ANE task events arrive\n"
+            o += "           on this chip / macOS. Please report the output of calibration/scripts/trace_decode.sh.\(esc)0m\n"
         } else {
+            if s.busySource == .host {
+                o += "\(esc)2mANE busy from driver submit/complete events (firmware events absent); includes queueing time\(esc)0m\n"
+            } else if s.busyStatus == .unverified {
+                o += "\(esc)2mno ANE task events yet; idle cannot be confirmed from IOReport on this chip\(esc)0m\n"
+            }
             for (i, b) in s.busyPct.enumerated() {
                 let name = s.busyPct.count > 1 ? "ANE\(i) busy" : "ANE busy "
                 let avg = s.avgTaskMs[i].map { String(format: "%8.3f ms/task", $0) } ?? "               "
@@ -90,24 +108,31 @@ final class TUI {
             }
         }
         if let p = s.powerW {
-            // 3.4 W is the highest ANE power measured on M4 (INT8 3x3 conv at 31 TOPS).
-            let maxW = 3.4
-            o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W   \(esc)2m(powermetrics estimate)\(esc)0m\n", bar(p / maxW, barW), p)
-        } else if !powerAvailable {
+            // Full scale: the highest ANE power measured on this chip (M4: 3.4 W
+            // at 31 TOPS INT8), or the highest value seen so far on others.
+            let scale = maxMeasured ? "" : ", scale = max seen"
+            o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W   \(esc)2m(powermetrics estimate%@)\(esc)0m\n",
+                        bar(p / maxW, barW), p, scale)
+        } else if !monitor.hasPower {
             o += "\(esc)2mPower      needs root (run with sudo)\(esc)0m\n"
         } else {
             o += "\(esc)2mPower      waiting for powermetrics…\(esc)0m\n"
         }
-        if let r = s.dramReadGBs, let wr = s.dramWriteGBs, let irq = s.interruptsPerS {
-            o += String(format: "DRAM       read %6.2f GB/s   write %6.2f GB/s   interrupts %7.0f/s\n", r, wr, irq)
+        if let r = s.dramReadGBs, let maxR = monitor.maxReadGBs {
+            o += String(format: "DRAM read  \(esc)35m%@\(esc)0m %6.1f GB/s  \(esc)2m(scale = calibrated %.0f GB/s)\(esc)0m\n",
+                        bar(r / maxR, barW), r, maxR)
         }
+        let dram = s.dramReadGBs.map { r in String(format: "read %6.2f GB/s   write %6.2f GB/s", r, s.dramWriteGBs ?? 0) }
+            ?? "\(esc)2mn/a (no ANE DRAM counters on this chip)\(esc)0m"
+        let irq = s.interruptsPerS.map { String(format: "interrupts %7.0f/s", $0) } ?? "\(esc)2minterrupts n/a\(esc)0m"
+        o += "DRAM       \(dram)   \(irq)\n"
         o += "\n"
         let sw = max(10, w - 14)
         for (i, h) in history.enumerated() {
             o += String(format: "%@ \(esc)32m%@\(esc)0m  100%%\n", history.count > 1 ? "busy ANE\(i)" : "busy     ", spark(h, max: 100, sw))
         }
         if !powerHistory.isEmpty {
-            o += String(format: "power     \(esc)36m%@\(esc)0m %4.1fW\n", spark(powerHistory, max: 3.4, sw), 3.4)
+            o += String(format: "power     \(esc)36m%@\(esc)0m %4.1fW\n", spark(powerHistory, max: maxW, sw), maxW)
         }
         if !s.programs.isEmpty {
             o += "\n\(esc)1mprograms (ANE time this interval)\(esc)0m\n"

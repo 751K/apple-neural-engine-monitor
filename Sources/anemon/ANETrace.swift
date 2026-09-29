@@ -15,10 +15,25 @@ import Foundation
 /// task rates (≈10k/s) the firmware reports only a few percent of tasks at
 /// all; gaps in a program's transaction ids recover the count of unreported
 /// tasks, which are charged that same median duration.
+///
+/// The driver also logs code 0x28 (debug-id 0x061b00a0) when it submits a
+/// request (arg1 = 0) and when the firmware reports it complete (arg1 = 1),
+/// with the program handle in arg2 and the transaction id in arg4. Xcode's
+/// Neural Engine instrument reads the same event, so it is the fallback on
+/// chips whose firmware events differ. Its spans include queueing: on M4 they
+/// run a few microseconds longer than the firmware spans.
 enum ANEEvent {
     static let classSubclass: UInt16 = 0x061b
     static let taskStart: UInt32 = 0x061b_0125
     static let taskEnd: UInt32 = 0x061b_0126
+    static let hostRequest: UInt32 = 0x061b_00a0
+}
+
+/// Which events the busy figures come from.
+enum BusySource: String {
+    case firmware   // ANE firmware start/end (most precise)
+    case host       // driver submit/complete (includes queueing)
+    case none       // no ANE task event seen yet
 }
 
 /// A completed or in-flight task interval in nanoseconds (mach time based).
@@ -63,6 +78,7 @@ struct TraceWindow {
     var droppedReads: Int
     var eventsRead: Int
     var restarts: Int
+    var source: BusySource
 }
 
 /// Reads ANE task events from kdebug and turns them into busy time.
@@ -82,7 +98,15 @@ final class ANETrace {
     private var readErrors = 0
     private var eventsRead = 0
     private var restarts = 0
-    private(set) var knownDevices: Set<UInt32> = []
+    private var firmwareDevices: Set<UInt32> = []
+    private var hostSeen = false
+    /// Host-side requests have no ANE cpu; they are tracked as one device.
+    private static let hostDevice: UInt32 = .max
+    /// ANEMON_FORCE_HOST=1 ignores firmware events, to validate the fallback;
+    /// ANEMON_IGNORE_EVENTS=1 ignores all task events, to simulate a chip
+    /// whose events are unknown.
+    private let forceHost = ProcessInfo.processInfo.environment["ANEMON_FORCE_HOST"] == "1"
+    private let ignoreEvents = ProcessInfo.processInfo.environment["ANEMON_IGNORE_EVENTS"] == "1"
     /// Delay between drains of the kdebug buffer.
     private let readPeriodUs: UInt32 = {
         if let v = ProcessInfo.processInfo.environment["ANEMON_READ_MS"], let ms = UInt32(v) { return ms * 1000 }
@@ -157,37 +181,50 @@ final class ANETrace {
     }
 
     private func handle(_ e: anemon_kd_buf) {
-        guard e.debugid == ANEEvent.taskStart || e.debugid == ANEEvent.taskEnd else { return }
-        let ts = anemon_mach_to_ns(e.timestamp)
-        let cpu = e.cpuid
-        knownDevices.insert(cpu)
-        let program = ProgramKey(cpu: cpu, handle: e.arg1)
-        let key = TaskKey(program: program, txn: e.arg3)
-        if e.debugid == ANEEvent.taskStart {
-            pendingStart[key] = (ts, e.arg1, cpu)
+        if ignoreEvents { return }
+        switch e.debugid {
+        case ANEEvent.taskStart, ANEEvent.taskEnd:
+            guard !forceHost else { return }
+            firmwareDevices.insert(e.cpuid)
+            task(ts: anemon_mach_to_ns(e.timestamp), cpu: e.cpuid, handle: e.arg1, txn: e.arg3,
+                 isStart: e.debugid == ANEEvent.taskStart)
+        case ANEEvent.hostRequest where e.arg1 <= 1:
+            hostSeen = true
+            task(ts: anemon_mach_to_ns(e.timestamp), cpu: Self.hostDevice, handle: e.arg2, txn: e.arg4,
+                 isStart: e.arg1 == 0)
+        default:
+            break
+        }
+    }
+
+    private func task(ts: Double, cpu: UInt32, handle: UInt64, txn: UInt64, isStart: Bool) {
+        let program = ProgramKey(cpu: cpu, handle: handle)
+        let key = TaskKey(program: program, txn: txn)
+        if isStart {
+            pendingStart[key] = (ts, handle, cpu)
             return
         }
         // Tasks of this program the firmware did not report since the last one.
         var missing = 0
-        if let last = lastTxn[program], e.arg3 > last + 1, e.arg3 - last < 1_000_000 {
-            missing = Int(e.arg3 - last - 1)
+        if let last = lastTxn[program], txn > last + 1, txn - last < 1_000_000 {
+            missing = Int(txn - last - 1)
         }
-        if e.arg3 > lastTxn[program] ?? 0 { lastTxn[program] = e.arg3 }
+        if txn > lastTxn[program] ?? 0 { lastTxn[program] = txn }
         // A program's tasks finish in order: earlier starts whose end was not
         // reported are over, not still running.
-        let stale = pendingStart.keys.filter { $0.program == program && $0.txn < e.arg3 }
+        let stale = pendingStart.keys.filter { $0.program == program && $0.txn < txn }
         for k in stale { pendingStart.removeValue(forKey: k) }
 
         var start: Double
         var estimated = false
         if let s = pendingStart.removeValue(forKey: key) {
             start = s.ts
-            var d = recentDur[e.arg1, default: []]
+            var d = recentDur[handle, default: []]
             d.append(ts - start)
             if d.count > 64 { d.removeFirst(d.count - 64) }
-            recentDur[e.arg1] = d
+            recentDur[handle] = d
         } else {
-            start = ts - typicalDuration(e.arg1)
+            start = ts - typicalDuration(handle)
             estimated = true
         }
         // One ANE executes one task at a time: never overlap the previous task.
@@ -197,13 +234,13 @@ final class ANETrace {
             // Charge unreported tasks their typical duration, but never more
             // than the idle gap they must have run in.
             let room = max(0, start - (prevEnd ?? start))
-            let fill = min(Double(missing) * typicalDuration(e.arg1, fallback: ts - start), room)
+            let fill = min(Double(missing) * typicalDuration(handle, fallback: ts - start), room)
             intervals[cpu, default: []].append(TaskInterval(start: start - fill, end: start, estimated: true, count: missing))
-            programOf[cpu, default: []].append((start, e.arg1, fill, missing))
+            programOf[cpu, default: []].append((start, handle, fill, missing))
         }
         lastEnd[cpu] = ts
         intervals[cpu, default: []].append(TaskInterval(start: start, end: ts, estimated: estimated))
-        programOf[cpu, default: []].append((ts, e.arg1, ts - start, 1))
+        programOf[cpu, default: []].append((ts, handle, ts - start, 1))
     }
 
     private func typicalDuration(_ handle: UInt64, fallback: Double = 0) -> Double {
@@ -218,7 +255,9 @@ final class ANETrace {
         defer { lock.unlock() }
         var devices: [DeviceWindow] = []
         var programs: [UInt64: ProgramStats] = [:]
-        for cpu in knownDevices.sorted() {
+        let source: BusySource = !firmwareDevices.isEmpty ? .firmware : hostSeen ? .host : .none
+        let cpus = source == .firmware ? firmwareDevices.sorted() : source == .host ? [Self.hostDevice] : []
+        for cpu in cpus {
             var w = DeviceWindow(cpuid: cpu)
             for iv in intervals[cpu] ?? [] where iv.end >= from && iv.start <= to {
                 w.busyNs += min(iv.end, to) - max(iv.start, from)
@@ -242,6 +281,8 @@ final class ANETrace {
                 programs[p.handle]!.busyNs += min(p.dur, p.end - from)
             }
             devices.append(w)
+        }
+        for cpu in intervals.keys {
             intervals[cpu]?.removeAll { $0.end < from }
             programOf[cpu]?.removeAll { $0.end < from }
         }
@@ -249,6 +290,7 @@ final class ANETrace {
         defer { readErrors = 0; eventsRead = 0; restarts = 0 }
         return TraceWindow(startNs: from, endNs: to, devices: devices,
                            programs: programs.values.sorted { $0.busyNs > $1.busyNs },
-                           droppedReads: readErrors, eventsRead: eventsRead, restarts: restarts)
+                           droppedReads: readErrors, eventsRead: eventsRead, restarts: restarts,
+                           source: source)
     }
 }

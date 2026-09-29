@@ -3,6 +3,7 @@
 A terminal monitor for the Apple Neural Engine (ANE) on Apple Silicon Macs.
 
 ```
+sudo .build/make/anemon calibrate  # once per machine: measure limits, check busy %
 sudo .build/make/anemon            # full-screen view, q to quit
 sudo .build/make/anemon --json     # one JSON object per interval
      .build/make/anemon --json     # without root: DRAM and interrupt counters only
@@ -22,6 +23,23 @@ This builds two binaries in `.build/make/`:
 - **`anebench`**, a small tool that generates convolution models and runs
   them on the ANE. The calibration scripts use it for their test workloads.
 
+## Calibration
+
+`sudo anemon calibrate` runs reference workloads through `anebench` for about
+90 seconds. Keep other ANE and GPU work closed while it runs. It measures:
+
+- idle and maximum ANE power, using an INT8 5×5 convolution stack
+- peak INT8 throughput
+- the highest DRAM read bandwidth the ANE reaches, using an FP16 GEMV shaped
+  like an LLM output head
+- busy % against 10 ms tasks run at 100% and 50% duty. The check passes if
+  anemon is within 5 percentage points of the host-measured share.
+
+The results are saved to `/Library/Application Support/anemon/<architecture>.json`.
+Later runs use this file for the full-scale value of the power and DRAM bars,
+and treat the machine as validated when the busy % check passed on the same
+macOS major version.
+
 ## Metrics
 
 | Field | Meaning | Source | Needs root |
@@ -32,6 +50,19 @@ This builds two binaries in `.build/make/`:
 | power | ANE power estimate | `powermetrics` | yes |
 | DRAM read/write | ANE traffic at the DRAM controllers (AMC DCS counters) | IOReport | no |
 | interrupts | ANE interrupt rate | IOReport | no |
+
+The JSON output also reports:
+
+- `ane_busy_source`: where busy % came from. `firmware` means ANE firmware task
+  events; `host` means the driver's submit/complete events, which include
+  queueing time; `none` means no task events have been seen.
+- `ane_busy_status`: `measured`, `idle`, `unverified` or `unsupported`. It is
+  `unsupported` when IOReport shows the ANE working but no task events arrive
+  on that chip or macOS version. In that case `ane_busy_pct` is null rather
+  than 0.
+- `validated` and `calibrated`.
+
+A counter whose IOReport channels do not exist on a chip is null, not 0.
 
 **busy % is time occupancy, not compute utilization.** It says whether the ANE had
 work, like the GPU "active" figure, not how many of its 16 cores or MAC units
@@ -94,7 +125,9 @@ convolutions, 3.4 W for INT8 at 31 TOPS.
   per second, and anemon spends noticeable CPU decoding them.
 - Event codes, the IOReport counters and the powermetrics output format are
   private or undocumented and may change between macOS releases or chips. So
-  far this has only been validated on M4 with macOS 27. The per-device split is
+  far this has only been validated on M4 with macOS 27. On other chips, run
+  `anemon calibrate`. If busy % shows as unsupported, please report the output
+  of `calibration/scripts/trace_decode.sh`. The per-device split is
   implemented for chips with two ANEs (for example an M6 with two H11ANE
   instances) but has not been tested there.
 - Processes are not identified: the task events carry a program handle, not a PID.

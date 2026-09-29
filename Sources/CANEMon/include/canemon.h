@@ -58,11 +58,19 @@ typedef struct anemon_ior anemon_ior;
 // channel name. Returns NULL if libIOReport cannot be loaded.
 anemon_ior *anemon_ior_open(void);
 
+// Which counters a sample found. Channel names differ between chips, so a
+// missing channel must not be reported as zero traffic.
+enum {
+    ANEMON_IOR_DRAM = 1,        // AMC "ANE DCS RD/WR" channels present
+    ANEMON_IOR_INTERRUPTS = 2,  // "Interrupt Statistics" ane channels present
+};
+
 // Takes a sample and writes deltas since the previous call:
 // DRAM bytes read/written by the ANE (AMC DCS counters) and ANE interrupt count.
+// *found receives a mask of ANEMON_IOR_* for the counters that exist.
 // Returns 0 on success; the first call only primes the baseline and returns 1.
 int anemon_ior_sample(anemon_ior *r, uint64_t *rd_bytes, uint64_t *wr_bytes,
-                      uint64_t *interrupts);
+                      uint64_t *interrupts, int *found);
 
 void anemon_ior_close(anemon_ior *r);
 

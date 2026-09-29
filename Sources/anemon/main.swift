@@ -2,6 +2,7 @@ import Foundation
 
 let usage = """
 usage: sudo anemon [--interval SECONDS] [--json] [--count N] [--no-power]
+       sudo anemon calibrate
 
 Monitors the Apple Neural Engine:
   busy %     time the ANE spent executing tasks (kdebug firmware events, root)
@@ -10,7 +11,15 @@ Monitors the Apple Neural Engine:
   DRAM       ANE memory traffic and interrupt rate (IOReport, no root needed)
 
 Without root only the DRAM/interrupt counters are available.
+
+`anemon calibrate` runs reference workloads (about 90 s) to measure this
+machine's ANE power, peak compute and read bandwidth, checks busy % against
+known duty cycles, and saves the results for later runs.
 """
+
+if CommandLine.arguments.dropFirst().first == "calibrate" {
+    exit(Calibrate.run())
+}
 
 var interval = 1.0
 var json = false
@@ -51,8 +60,13 @@ func jsonLine(_ s: Snapshot) -> String {
         "timestamp": ISO8601DateFormatter().string(from: s.time),
         "interval_s": s.intervalS,
     ]
+    d["validated"] = monitor.isValidated
+    d["calibrated"] = monitor.profile != nil
     if monitor.trace != nil {
-        d["ane_busy_pct"] = s.busyPct
+        d["ane_busy_source"] = s.busySource.rawValue
+        d["ane_busy_status"] = s.busyStatus.rawValue
+        // Unsupported: do not report a busy figure we cannot measure.
+        d["ane_busy_pct"] = s.busyStatus == .unsupported ? NSNull() : s.busyPct as Any
         d["ane_tasks_per_s"] = s.tasksPerS
         d["ane_avg_task_ms"] = s.avgTaskMs.map { $0 ?? NSNull() as Any }
         d["ane_estimated_task_pct"] = s.estimatedPct
@@ -92,7 +106,7 @@ while true {
         print(jsonLine(s))
         fflush(stdout)
     } else {
-        tui!.render(s, device: monitor.device, traceNote: monitor.traceError, powerAvailable: monitor.hasPower)
+        tui!.render(s, monitor: monitor)
     }
     n += 1
     if count > 0 && n >= count { shutdown(0) }
