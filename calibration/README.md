@@ -136,8 +136,11 @@ committed.
   busy with the model, optionally with a duty cycle. It prints the time per
   evaluation and the share of wall time spent inside evaluations.
 
-anebench compiles and runs models through the private `_ANEClient` API: it
-maps the I/O surfaces once and uses `doEvaluateDirectWithModel`.
+anebench compiles and runs models through the private `_ANEClient` API. It
+maps the I/O surfaces once and calls `doEvaluateDirectWithModel`, as
+`github.com/tmc/apple` does. With a tight loop on a tiny model, the
+`evaluateWithModel` path through aned, the direct path and the in-memory model
+path all take 112–119 µs per call.
 
 Weight file format. A MIL blob file starts with a 64-byte header
 `{u32 count, u32 version = 2}`, then one 64-byte descriptor per blob
@@ -148,6 +151,6 @@ Weight file format. A MIL blob file starts with a 64-byte header
 
 The first calibration runs used Go versions of these tools. anebench generates
 the same MIL text and the same weight layout, with different random weight
-values, and gives the same per-evaluation times on large models. On tiny
-models it spends about 40 µs more per call on the host. That changes how many
-tasks per second it can submit, but none of the calibration results.
+values. Interleaved runs give the same per-evaluation time: 0.119–0.122 ms
+against 0.115–0.117 ms for the Go runner on a tiny model, and about 10 ms for
+both on large models.
