@@ -1,0 +1,128 @@
+import Foundation
+
+/// Full-screen ANSI renderer.
+final class TUI {
+    private var history: [[Double]] = []   // busy % per device
+    private var powerHistory: [Double] = []
+    private var orig = termios()
+    private let esc = "\u{1B}["
+
+    func enter() {
+        tcgetattr(STDIN_FILENO, &orig)
+        var raw = orig
+        raw.c_lflag &= ~tcflag_t(ICANON | ECHO)
+        raw.c_cc.16 = 0 // VMIN
+        raw.c_cc.17 = 0 // VTIME
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw)
+        out("\(esc)?1049h\(esc)?25l")
+    }
+
+    func leave() {
+        out("\(esc)?25h\(esc)?1049l")
+        tcsetattr(STDIN_FILENO, TCSANOW, &orig)
+    }
+
+    /// Returns true if the user pressed q.
+    func quitRequested() -> Bool {
+        var c: UInt8 = 0
+        while read(STDIN_FILENO, &c, 1) == 1 {
+            if c == UInt8(ascii: "q") || c == UInt8(ascii: "Q") || c == 3 { return true }
+        }
+        return false
+    }
+
+    private func out(_ s: String) {
+        FileHandle.standardOutput.write(s.data(using: .utf8)!)
+    }
+
+    private var width: Int {
+        var w = winsize()
+        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0, w.ws_col > 20 { return Int(w.ws_col) }
+        return 80
+    }
+
+    private func color(_ pct: Double) -> String {
+        pct < 50 ? "\(esc)32m" : pct < 85 ? "\(esc)33m" : "\(esc)31m"
+    }
+
+    private func bar(_ frac: Double, _ n: Int) -> String {
+        let f = max(0, min(1, frac)) * Double(n)
+        let full = Int(f)
+        let parts = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"]
+        let rem = parts[Int((f - Double(full)) * 8)]
+        let s = String(repeating: "█", count: full) + rem
+        return s + String(repeating: "·", count: max(0, n - full - (rem.isEmpty ? 0 : 1)))
+    }
+
+    private func spark(_ v: [Double], max top: Double, _ n: Int) -> String {
+        let ticks = Array("▁▂▃▄▅▆▇█")
+        let tail = v.suffix(n)
+        let pad = String(repeating: " ", count: n - tail.count)
+        return pad + String(tail.map { x in
+            x <= 0 ? " " : ticks[min(7, Int(x / top * 7.999))]
+        })
+    }
+
+    func render(_ s: Snapshot, device: DeviceInfo, traceNote: String?, powerAvailable: Bool) {
+        let w = min(width, 100)
+        let barW = max(10, w - 44)
+        if history.count < s.busyPct.count { history += Array(repeating: [], count: s.busyPct.count - history.count) }
+        for (i, b) in s.busyPct.enumerated() { history[i].append(b); if history[i].count > 200 { history[i].removeFirst() } }
+        if let p = s.powerW { powerHistory.append(p); if powerHistory.count > 200 { powerHistory.removeFirst() } }
+
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm:ss"
+        var o = "\(esc)H\(esc)2J"
+        o += "\(esc)1manemon\(esc)0m  Apple Neural Engine monitor   \(esc)2m\(device.chip) · \(device.architecture) · \(device.cores) cores · \(df.string(from: s.time))\(esc)0m\n"
+        o += String(repeating: "─", count: w) + "\n"
+
+        if let note = traceNote {
+            o += "\(esc)33m! busy %: \(note)\(esc)0m\n"
+        } else {
+            for (i, b) in s.busyPct.enumerated() {
+                let name = s.busyPct.count > 1 ? "ANE\(i) busy" : "ANE busy "
+                let avg = s.avgTaskMs[i].map { String(format: "%8.3f ms/task", $0) } ?? "               "
+                o += String(format: "%@  %@%@\(esc)0m %6.1f %%  %7.0f tasks/s %@\n",
+                            name, color(b), bar(b / 100, barW), b, s.tasksPerS[i], avg)
+                if s.estimatedPct[i] > 20 {
+                    o += String(format: "\(esc)2m           %.0f%% of tasks were only partly reported by the firmware; their time is estimated\(esc)0m\n", s.estimatedPct[i])
+                }
+            }
+        }
+        if let p = s.powerW {
+            // 3.4 W is the highest ANE power measured on M4 (INT8 3x3 conv at 31 TOPS).
+            let maxW = 3.4
+            o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W   \(esc)2m(powermetrics estimate)\(esc)0m\n", bar(p / maxW, barW), p)
+        } else if !powerAvailable {
+            o += "\(esc)2mPower      needs root (run with sudo)\(esc)0m\n"
+        } else {
+            o += "\(esc)2mPower      waiting for powermetrics…\(esc)0m\n"
+        }
+        if let r = s.dramReadGBs, let wr = s.dramWriteGBs, let irq = s.interruptsPerS {
+            o += String(format: "DRAM       read %6.2f GB/s   write %6.2f GB/s   interrupts %7.0f/s\n", r, wr, irq)
+        }
+        o += "\n"
+        let sw = max(10, w - 14)
+        for (i, h) in history.enumerated() {
+            o += String(format: "%@ \(esc)32m%@\(esc)0m  100%%\n", history.count > 1 ? "busy ANE\(i)" : "busy     ", spark(h, max: 100, sw))
+        }
+        if !powerHistory.isEmpty {
+            o += String(format: "power     \(esc)36m%@\(esc)0m %4.1fW\n", spark(powerHistory, max: 3.4, sw), 3.4)
+        }
+        if !s.programs.isEmpty {
+            o += "\n\(esc)1mprograms (ANE time this interval)\(esc)0m\n"
+            o += "  handle              share   tasks/s    ms/task\n"
+            for p in s.programs.prefix(8) {
+                let share = 100 * p.busyNs / (s.intervalS * 1e9)
+                o += String(format: "  0x%-14llx %7.1f%% %9.0f %10.3f\n", p.handle, share,
+                            Double(p.tasks) / s.intervalS, p.busyNs / Double(max(p.tasks, 1)) / 1e6)
+            }
+        }
+        if s.traceErrors > 0 { o += "\(esc)31mkdebug read errors: \(s.traceErrors)\(esc)0m\n" }
+        if s.traceRestarts > 0 {
+            o += "\(esc)33mkdebug buffer overflowed and was restarted \(s.traceRestarts)× — busy % may be low this interval\(esc)0m\n"
+        }
+        o += "\n\(esc)2mq quit · busy % = time the ANE was executing a task (not how many of its cores or MACs were used)\(esc)0m\n"
+        out(o)
+    }
+}

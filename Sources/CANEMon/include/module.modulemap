@@ -1,0 +1,4 @@
+module CANEMon {
+    header "canemon.h"
+    export *
+}
