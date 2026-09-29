@@ -38,7 +38,8 @@ arithmetic throughput. Compute efficiency needs the ANE's per-request PMU
 counters, and only the process that submits a request gets them back. On M4,
 `MACs / NE_NOMINAL_CYCLES` divided by 256 (FP16) or 512 (INT8 weights and
 activations) gives the share of peak. A stack of 5×5 INT8 convolutions reached
-38.2 TOPS against a 38.4 TOPS peak.
+38.2 TOPS against a 38.4 TOPS peak. The measurements, scripts and data are in
+[`calibration/`](calibration/).
 
 ### How busy time is measured
 
@@ -95,3 +96,7 @@ convolutions, 3.4 W for INT8 at 31 TOPS.
   implemented for chips with two ANEs (for example an M6 with two H11ANE
   instances) but has not been tested there.
 - Processes are not identified: the task events carry a program handle, not a PID.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

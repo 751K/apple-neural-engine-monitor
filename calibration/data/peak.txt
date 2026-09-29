@@ -1,0 +1,49 @@
+Sustained W8A8 conv throughput on M4 (h16g), macOS 27, measured with tools/cmd/burn.
+TOPS = 2 x MACs / time. MACs for "same" padding count the padded border
+(about 2% of the total at 128x128, k=5); "valid" rows count only real MACs.
+
+Single layer, "same" padding (scripts/peak.sh C HW K 1 same)
+k3 C512   HW64        9.7G MAC     0.799 ms   24.2 TOPS
+k3 C512   HW128      38.7G MAC     2.815 ms   27.5 TOPS
+k3 C1024  HW64       38.7G MAC     2.658 ms   29.1 TOPS
+k3 C1024  HW128     154.6G MAC     9.847 ms   31.4 TOPS
+k3 C2048  HW64      154.6G MAC    11.922 ms   25.9 TOPS
+k3 C2048  HW128     618.5G MAC    46.062 ms   26.9 TOPS
+k5 C512   HW64       26.8G MAC     1.852 ms   29.0 TOPS
+k5 C512   HW128     107.4G MAC     7.088 ms   30.3 TOPS
+k5 C768   HW128     241.6G MAC    17.888 ms   27.0 TOPS
+k5 C768   HW256     966.4G MAC    77.890 ms   24.8 TOPS
+k5 C1024  HW64      107.4G MAC     6.129 ms   35.0 TOPS
+k5 C1024  HW128     429.5G MAC    23.683 ms   36.3 TOPS
+k5 C1024  HW192     966.4G MAC    56.938 ms   33.9 TOPS
+k5 C1024  HW256    1718.0G MAC   108.482 ms   31.7 TOPS
+k5 C1152  HW128     543.6G MAC    29.665 ms   36.6 TOPS
+k5 C1280  HW128     671.1G MAC    36.639 ms   36.6 TOPS
+k5 C1536  HW128     966.4G MAC   102.293 ms   18.9 TOPS   (weights 59 MB)
+k5 C2048  HW64      429.5G MAC    45.661 ms   18.8 TOPS   (weights 105 MB)
+k5 C2048  HW128    1718.0G MAC   181.078 ms   19.0 TOPS
+k4 C1024  HW128     274.9G MAC    20.047 ms   27.4 TOPS
+k6 C1024  HW128     618.5G MAC    65.649 ms   18.8 TOPS   (weights 38 MB)
+k7 C512   HW64       52.6G MAC     3.078 ms   34.2 TOPS
+k7 C512   HW128     210.5G MAC    11.752 ms   35.8 TOPS
+k7 C512   HW256     841.8G MAC    46.055 ms   36.6 TOPS
+k7 C640   HW128     328.8G MAC    18.052 ms   36.4 TOPS
+k7 C768   HW128     473.5G MAC    50.263 ms   18.8 TOPS   (weights 29 MB)
+k7 C768   HW256    1894.1G MAC   207.439 ms   18.3 TOPS
+k7 C1024  HW64      210.5G MAC    22.438 ms   18.8 TOPS
+k7 C1024  HW128     841.8G MAC    88.692 ms   19.0 TOPS
+k7 C2048  *         compile failed
+
+Chained layers in one model (scripts/peak.sh C HW K LAYERS PAD)
+k5 C1152  HW128  L1  same     543.6G MAC    29.750 ms   36.5 TOPS  (95.2% of 38.4)
+k5 C1152  HW128  L1  valid    510.1G MAC    29.182 ms   35.0 TOPS  (91.0% of 38.4)
+k5 C1152  HW132  L1  valid    543.6G MAC    29.861 ms   36.4 TOPS  (94.8% of 38.4)
+k5 C1024  HW132  L1  valid    429.5G MAC    23.807 ms   36.1 TOPS  (94.0% of 38.4)
+k5 C1152  HW64   L4  same     543.6G MAC    28.932 ms   37.6 TOPS  (97.9% of 38.4)
+k5 C1152  HW128  L4  same    2174.3G MAC   114.402 ms   38.0 TOPS  (99.0% of 38.4)
+k7 C640   HW128  L1  valid    298.7G MAC    17.250 ms   34.6 TOPS  (90.2% of 38.4)
+k7 C640   HW128  L4  same    1315.3G MAC    69.204 ms   38.0 TOPS  (99.0% of 38.4)
+k5 C1024  HW128  L8  same    3436.0G MAC   179.686 ms   38.2 TOPS  (99.6% of 38.4)
+k5 C1024  HW160  L8  valid   4246.3G MAC   239.137 ms   35.5 TOPS  (92.5% of 38.4)
+k5 C1152  HW144  L4  valid   2385.6G MAC   133.687 ms   35.7 TOPS  (92.9% of 38.4)
+k7 C640   HW152  L4  valid   1510.4G MAC    84.481 ms   35.8 TOPS  (93.1% of 38.4)

@@ -1,0 +1,29 @@
+M4 ANE (h16g), macOS 27 — format sweep. eff% = MACs/NE_NOMINAL/peak (peak 512 if INT8 activations else 256). TOPS from host latency.
+format                         3x3 C1024 64² (W-bound)           3x3 C512 128²          1x1 C1024 128²
+                                    ms   eff%   TOPS        ms   eff%   TOPS        ms   eff%   TOPS  
+io:fp16 w:fp16 a:fp16            10.73   38.0    7.2      5.28   78.9   14.6      2.51   73.2   13.7  
+io:fp16 w:int8 a:fp16             5.01   81.7   15.4      4.68   87.2   16.5      2.51   73.1   13.7  
+io:fp16 w:uint8 a:fp16            4.98   82.0   15.5      4.66   87.7   16.6      2.48   72.6   13.8  
+io:fp16 w:int4 a:fp16             4.65   87.7   16.6      4.63   88.1   16.7      2.41   75.7   14.2  
+io:fp16 w:uint4 a:fp16            4.76   87.5   16.3      4.74   87.4   16.3      2.39   75.7   14.4  
+io:fp16 w:lut1 a:fp16             4.83   87.5   16.0      4.65   87.7   16.6      2.41   75.8   14.3  
+io:fp16 w:lut2 a:fp16             4.73   86.8   16.3      4.68   88.0   16.5      2.44   74.8   14.1  
+io:fp16 w:lut3 a:fp16             4.66   87.6   16.6      4.66   87.7   16.6      2.42   75.6   14.2  
+io:fp16 w:lut4 a:fp16             4.66   87.4   16.6      4.82   88.1   16.0      2.42   75.5   14.2  
+io:fp16 w:lut6 a:fp16             4.72   86.6   16.4      4.95   87.7   15.6      2.52   74.5   13.7  
+io:fp16 w:lut8 a:fp16             5.05   81.8   15.3      4.67   87.6   16.5      2.45   72.9   14.0  
+io:fp16 w:sp50 a:fp16             6.26   65.1   12.3      5.15   79.1   15.0      4.36   42.0    7.9  
+io:fp16 w:sp75 a:fp16             6.08   66.5   12.7      5.14   78.9   15.0      4.32   41.9    8.0  
+io:fp16 w:sp50lut4 a:fp16         6.13   66.4   12.6      5.17   79.2   14.9      4.39   41.3    7.8  
+io:fp16 w:fp16 a:int8             5.43   39.1   14.2      5.29   38.9   14.6      3.50   26.1    9.8  
+io:fp16 w:int8 a:int8             2.98   68.6   25.9      3.25   64.3   23.8      2.77   32.6   12.4  
+io:fp16 w:int8 a:uint8            3.09   66.6   25.0      3.29   64.3   23.5      2.80   32.5   12.3  
+io:fp16 w:int4 a:int8             2.93   71.0   26.4      3.18   64.3   24.3      2.19   41.9   15.7  
+io:fp16 w:lut4 a:int8             5.01   41.2   15.4      5.28   38.7   14.6      3.42   30.2   10.0  
+io:fp16 w:lut8 a:int8             5.21   41.3   14.8      5.31   38.7   14.6      3.53   26.0    9.7  
+io:fp16 w:sp50 a:int8             5.17   39.7   15.0      5.26   39.1   14.7      3.95   22.9    8.7  
+io:fp32 w:fp16 a:fp16            11.64   35.1    6.6      5.64   73.9   13.7      3.67   49.7    9.4  
+io:fp16 w:fp16 a:fp16 p:fp32     10.64   37.9    7.3      5.52   75.0   14.0      2.48   73.3   13.9  
+
+Failed to compile for ANE: per-block (sub-channel) int8/int4 at block 32/64/128/256 (1x1 and 3x3, fp16 or int8 act);
+fp32 I/O + fp32 precision; raw-MIL bf16 I/O, bf16 weights, bf16 compute, fp32 compute, fp8 (e4m3fn/e5m2).

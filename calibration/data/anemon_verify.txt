@@ -1,0 +1,15 @@
+anemon busy % against duty-cycled workloads, M4 (h16g), macOS 27 (scripts/verify_anemon.sh).
+host-busy = share of wall time the workload spent inside synchronous Eval calls.
+
+case       host-busy  anemon busy  tasks/s  ms/task  power W  DRAM rd GB/s
+idle              0%         0.0%        0      nan     0.00     0.00
+long_100      100.0%        98.3%       99    9.927     3.25    23.24
+long_50        51.4%        50.9%       51   10.347     1.53    11.55
+long_25        26.7%        26.8%       24   11.281     0.70     5.53
+vlong_100     100.0%        99.5%       23   42.119     2.08    25.37
+mid_50         53.8%        51.1%       62    8.267     0.69     6.84
+
+Tiny tasks (64x64 1x1 conv, ~12k Eval/s), after the drain-loop fix:
+  busy 3.2%, 13.5k tasks/s, 2.4 us/task, ~1.37M kdebug records/s, 0 restarts.
+  The firmware reports ~12-14% more tasks than Eval calls; a raw ktrace capture
+  shows the same excess with consecutive transaction ids (data/trace/short.txt).

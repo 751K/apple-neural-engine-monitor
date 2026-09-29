@@ -1,0 +1,1 @@
+fp16_conv_64_64_16x16_k1 evals=97066  0.144 ms/eval
