@@ -12,9 +12,9 @@ fp16 conv 64 64 16 16 1"
 echo "idle..."; sleep 3; pm idle 8
 while read -r mode op ci co h w k; do
   d=$MODELS/${mode}_${op}_${ci}_${co}_${h}x${w}_k${k}
-  [ -f "$d/model.mil" ] || as_user "$BIN/qgen" "$d" $mode $op $ci $co $h $w $k > /dev/null
+  [ -f "$d/model.mil" ] || as_user "$ANEBENCH" gen "$d" $mode $op $ci $co $h $w $k > /dev/null
   n=$(basename "$d"); echo "$n..."
-  as_user "$BIN/burn" -t 14s "$d" > "$OUT/$n.log" 2>&1 &
+  as_user "$ANEBENCH" run "$d" -t 14 > "$OUT/$n.log" 2>&1 &
   sleep 3; pm "$n" 10; wait; sleep 3
 done <<<"$models"
 "$PYTHON" "$CAL/scripts/power_report.py" "$OUT"

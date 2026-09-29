@@ -4,7 +4,7 @@
 #   MODE fp16 | w8 | a8w8   OP conv | dw
 source "$(dirname "$0")/env.sh"
 d=$MODELS/$1_$2_$3_$4_$5x$6_k$7
-[ -f "$d/macs" ] || { "$BIN/qgen" "$d" "$@" > "$d.macs" && mv "$d.macs" "$d/macs"; } || exit 1
+[ -f "$d/macs" ] || { "$ANEBENCH" gen "$d" "${@:1:7}" > "$d.macs" && mv "$d.macs" "$d/macs"; } || exit 1
 k=$(cat "$d/macs")
 out=$("$PROFILER" --mil "$d" --macs "$k" --iters "${8:-20}" 2>&1)
 if ! grep -q "Average Latency" <<<"$out"; then

@@ -98,14 +98,16 @@ idle to 99.5%.
 
 Requirements:
 
-- Go 1.25 or newer, to build the tools.
+- `anebench`, built by `make` at the repository root. It generates and runs
+  the test models.
 - `dump_ane_pmu_objc` from
   [ane_pmu_profiler](https://github.com/freedomtan/ane_pmu_profiler), for the
   PMU scripts.
 - Python with `coremltools==9.0` and NumPy, for the Core ML format sweep.
 
 ```
-cd calibration/tools && go build -o bin/ ./cmd/... && cd ..
+make                                          # at the repository root
+cd calibration
 export PROFILER=/path/to/dump_ane_pmu_objc    # PMU scripts only
 export PYTHON=/path/to/venv/bin/python        # Core ML scripts only
 ```
@@ -124,18 +126,28 @@ export PYTHON=/path/to/venv/bin/python        # Core ML scripts only
 Generated models and raw outputs go to `calibration/.work/`, which is not
 committed.
 
-### Tools (`tools/cmd/`)
+### anebench
 
-- **qgen** writes a single-conv MIL model directory:
-  `qgen DIR MODE OP CIN COUT H W K`. MODE is `fp16`, `w8` or `a8w8`; OP is
-  `conv` or `dw`. Set `PAD=valid` to use valid padding and `LAYERS=n` to chain
-  n layers.
-- **burn** keeps the ANE busy with a model for a set time, optionally with a
-  duty cycle.
-- **duty** runs a tiny conv with a fixed on/off duty cycle.
+- **`anebench gen DIR MODE OP CIN COUT H W K [--valid] [--layers N]`** writes a
+  MIL model with one conv layer, or N chained layers, and prints its MAC count.
+  MODE is `fp16`, `w8` (INT8 weights) or `a8w8` (INT8 weights and
+  activations); OP is `conv` or `dw`.
+- **`anebench run DIR [-t SECONDS] [--duty F] [--period MS]`** keeps the ANE
+  busy with the model, optionally with a duty cycle. It prints the time per
+  evaluation and the share of wall time spent inside evaluations.
 
-qgen writes its own weight file. The `mil.BlobWriter` in
-`github.com/tmc/apple` v0.4.4 writes the file header as
-`{u64 count, u32 version}`, but the ANE compiler expects
-`{u32 count, u32 version}`. `BLOBFILE` offsets must point at each blob's
-64-byte descriptor, not at its data.
+anebench compiles and runs models through the private `_ANEClient` API: it
+maps the I/O surfaces once and uses `doEvaluateDirectWithModel`.
+
+Weight file format. A MIL blob file starts with a 64-byte header
+`{u32 count, u32 version = 2}`, then one 64-byte descriptor per blob
+`{u32 0xDEADBEEF, u32 dtype, u64 size, u64 offset}`, then the data.
+`BLOBFILE` offsets point at the descriptor, not at the data. The
+`mil.BlobWriter` in `github.com/tmc/apple` v0.4.4 writes the header as
+`{u64 count, u32 version}`, and the ANE compiler rejects that.
+
+The first calibration runs used Go versions of these tools. anebench generates
+the same MIL text and the same weight layout, with different random weight
+values, and gives the same per-evaluation times on large models. On tiny
+models it spends about 40 µs more per call on the host. That changes how many
+tasks per second it can submit, but none of the calibration results.

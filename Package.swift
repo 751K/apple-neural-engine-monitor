@@ -13,5 +13,13 @@ let package = Package(
             name: "anemon",
             dependencies: ["CANEMon"]
         ),
+        .target(
+            name: "CANERun",
+            linkerSettings: [.linkedFramework("Foundation"), .linkedFramework("IOSurface")]
+        ),
+        .executableTarget(
+            name: "anebench",
+            dependencies: ["CANERun"]
+        ),
     ]
 )

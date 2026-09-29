@@ -4,7 +4,7 @@
 source "$(dirname "$0")/env.sh"
 A=${1:-$CAL/../.build/make/anemon}
 OUT=$WORK/verify; rm -rf "$OUT"; mkdir -p "$OUT"
-mk() { local d=$MODELS/$1; [ -f "$d/model.mil" ] || as_user "$BIN/qgen" "$d" "${@:2}" > /dev/null; echo "$d"; }
+mk() { local d=$MODELS/$1; [ -f "$d/model.mil" ] || as_user "$ANEBENCH" gen "$d" "${@:2}" > /dev/null; echo "$d"; }
 long=$(mk a8w8_conv_1024_1024_128x128_k3 a8w8 conv 1024 1024 128 128 3)
 vlong=$(mk fp16_conv_1024_1024_128x128_k3 fp16 conv 1024 1024 128 128 3)
 mid=$(mk fp16_conv_512_512_128x128_k3 fp16 conv 512 512 128 128 3)
@@ -15,12 +15,12 @@ case_() {
   sleep 1.5; "$A" --json --count 4 > "$OUT/$name.json" 2> "$OUT/$name.err"; wait; sleep 1
 }
 case_ idle
-case_ long_100  "$BIN/burn" -t 7s "$long"
-case_ long_50   "$BIN/burn" -t 7s -duty 0.5 "$long"
-case_ long_25   "$BIN/burn" -t 7s -duty 0.25 "$long"
-case_ vlong_100 "$BIN/burn" -t 7s "$vlong"
-case_ mid_50    "$BIN/burn" -t 7s -duty 0.5 -period 50ms "$mid"
-case_ tiny_100  "$BIN/burn" -t 7s "$tiny"
+case_ long_100  "$ANEBENCH" run "$long" -t 7
+case_ long_50   "$ANEBENCH" run "$long" -t 7 --duty 0.5
+case_ long_25   "$ANEBENCH" run "$long" -t 7 --duty 0.25
+case_ vlong_100 "$ANEBENCH" run "$vlong" -t 7
+case_ mid_50    "$ANEBENCH" run "$mid" -t 7 --duty 0.5 --period 50
+case_ tiny_100  "$ANEBENCH" run "$tiny" -t 7
 chmod -R a+r "$OUT"
 "$PYTHON" - "$OUT" <<'PY'
 import json, os, re, sys, statistics as st

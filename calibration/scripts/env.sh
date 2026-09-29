@@ -1,6 +1,6 @@
 # Shared settings, sourced by the other scripts.
 CAL=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BIN=$CAL/tools/bin                  # built with: (cd tools && go build -o bin/ ./cmd/...)
+ANEBENCH=${ANEBENCH:-$CAL/../.build/make/anebench}   # built by `make` at the repo root
 WORK=${WORK:-$CAL/.work}            # generated models and raw outputs
 MODELS=$WORK/models
 # dump_ane_pmu_objc from https://github.com/freedomtan/ane_pmu_profiler
