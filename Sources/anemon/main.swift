@@ -7,14 +7,16 @@ usage: sudo anemon [--interval SECONDS] [--json] [--count N] [--no-power]
 Monitors the Apple Neural Engine:
   busy %     time the ANE spent executing tasks (kdebug firmware events, root)
   tasks/s    completed ANE tasks, with average task duration
-  power      ANE power estimate from powermetrics (root)
+  power      ANE power estimate from powermetrics (root; may be unavailable)
   DRAM       ANE memory traffic and interrupt rate (IOReport, no root needed)
 
-Without root only the DRAM/interrupt counters are available.
+Without root, only IOReport DRAM/interrupt counters can be available; some
+chips do not expose counters that anemon currently recognizes.
 
-`anemon calibrate` runs reference workloads (about 90 s) to measure this
-machine's ANE power, peak compute and read bandwidth, checks busy % against
-known duty cycles, and saves the results for later runs.
+`anemon calibrate` runs reference workloads (about 90 s) to measure available
+power and bandwidth data, peak compute, and busy % against known duty cycles.
+Power may be unavailable; bandwidth may be estimated if DRAM counters are
+missing. Results are saved for later runs.
 """
 
 if CommandLine.arguments.dropFirst().first == "calibrate" {

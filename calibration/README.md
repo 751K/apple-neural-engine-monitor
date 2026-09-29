@@ -1,8 +1,9 @@
 # ANE calibration data and tools
 
-These are the measurements behind anemon and behind the compute-efficiency
-method in the top-level README. Everything was measured on an M4 Mac mini
-(Mac16,10; ANE architecture h16g, 16 cores) running macOS 27 (build 26A428).
+The committed datasets behind the compute-efficiency method and historical
+anemon validation were measured on an M4 Mac mini (Mac16,10; ANE architecture
+h16g, 16 cores) running macOS 27 (build 26A428). A separate M6 calibration
+result is recorded below; its raw captures are not part of these datasets.
 
 ## Findings
 
@@ -12,15 +13,42 @@ method in the top-level README. Everything was measured on an M4 Mac mini
 |---|---|---|
 | Is the ANE executing a task, and for how long? | kdebug firmware events `0x061b0125` (start) and `0x061b0126` (end) | yes |
 | Per-inference hardware counters | ANE PMU through `aned` (`kANEFPerformanceStatsMask`), only for the process that submits the request | no |
-| Power | `powermetrics -s cpu_power,ane_power` | yes |
+| Power | `powermetrics -s cpu_power,ane_power`, if the sampler exposes ANE power | yes |
 | DRAM traffic, interrupts | IOReport `AMC Stats` and `Interrupt Statistics` | no |
 
-On macOS 27, every channel in the IOReport `Energy Model` group reads 0 for
-ordinary processes, and still reads 0 when the reader is root. `powermetrics`
-reports non-zero values (for example 650–680 mW ANE under load), so the data
-exists and access is restricted to Apple's own tools. The `Fast-Die CE`
-histogram, which looks like a per-cluster utilization counter, stays empty
-under load on both M4 and M6.
+On the measured M4 / h16g system, the ANE IOReport energy reading stayed at 0
+even when sampled as root, while `powermetrics` reported estimates (about
+650–680 mW under one tested load). This is an observation for that M4 setup,
+not a general macOS 27 rule.
+
+On the M6 / h18g system (macOS 27.0.1, build 26A434), `powermetrics` produced
+no separate ANE power field, including during calibration. Its IOReport
+`Energy Model` subscription exposed six GPU/PCIe channels and no ANE energy
+channel. The full IOReport channel list contains `ANE0` and `ANE1` under
+`PMP / Fast-Die CE` and ANE state channels under `SoC Stats`; these are not
+watt readings. Calibration's 136.8 GB/s bandwidth result is an estimate from
+model bytes per evaluation time because the live M6 DRAM fields remained
+null. IOReport names its M6 counters `ANE0 DCS RD/WR` and `ANE1 DCS RD/WR`,
+but the current anemon reader only recognizes the older `ANE DCS ...`
+pattern. The `Fast-Die CE` counters were observed empty under the recorded M4
+and M6 workloads; channel names being present does not mean they yielded
+usable readings.
+
+### M6 calibration result (h18g, 32 cores, macOS 27.0.1)
+
+The duty-cycle validation passed within the 5-point tolerance:
+
+| Duty | Host | anemon | Result |
+|---|---:|---:|---|
+| 100% | 100.0% | 95.3% | pass |
+| 50% | 49.4% | 46.8% | pass |
+
+Calibration also reported 76.9 INT8 TOPS. ANE power was `n/a` at idle and
+under peak compute. Read bandwidth was 136.8 GB/s, but this used the benchmark
+fallback estimate rather than live DRAM counters. Therefore this M6 result
+validates busy-time measurement for these workloads, not ANE power or direct
+DRAM telemetry. Per-engine busy reporting has not been independently
+validated.
 
 ### ANE task events (`data/trace/`)
 
@@ -75,7 +103,7 @@ calibrations check which ones hold up:
 - Throughput halves to about 19 TOPS once a layer's INT8 weights pass roughly
   30–60 MB.
 
-### Power (`data/power_report.txt`)
+### M4 power (`data/power_report.txt`)
 
 | Load | Throughput | ANE power (estimate) |
 |---|---|---|

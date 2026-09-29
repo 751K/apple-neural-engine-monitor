@@ -2,10 +2,10 @@ import CANEMon
 import Foundation
 import IOKit
 
-/// ANE power estimate from `powermetrics` (root only). On macOS 27 the
-/// IOReport energy counters read as zero outside Apple-entitled processes,
-/// so powermetrics is the only source. Its `ane_power` sampler prints nothing
-/// on its own, hence `cpu_power` is requested alongside.
+/// ANE power estimate from the `ANE Power` line in `powermetrics` (root only).
+/// Availability varies by chip and OS. On the tested M6 / h18g with macOS
+/// 27.0.1, powermetrics emits no ANE field and IOReport's Energy Model group
+/// has no ANE energy channel, so the reading remains nil.
 final class PowerMetrics {
     private let proc = Process()
     private let lock = NSLock()
