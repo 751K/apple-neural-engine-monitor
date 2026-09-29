@@ -28,9 +28,10 @@ channel. The full IOReport channel list contains `ANE0` and `ANE1` under
 `PMP / Fast-Die CE` and ANE state channels under `SoC Stats`; these are not
 watt readings. Calibration's 136.8 GB/s bandwidth result is an estimate from
 model bytes per evaluation time because the live M6 DRAM fields remained
-null. IOReport names its M6 counters `ANE0 DCS RD/WR` and `ANE1 DCS RD/WR`,
-but the current anemon reader only recognizes the older `ANE DCS ...`
-pattern. The `Fast-Die CE` counters were observed empty under the recorded M4
+null. IOReport lists the M6 counters in `AMC Stats / Perf Counters` as
+`ANE0 DCS RD/WR`, `ANE1 DCS RD/WR` and `ANEXL0/1 DCS RD/WR`, but
+`IOReportCreateSubscription` returns NULL for that group, even for only the
+eight ANE DCS channels and even as root, so no samples can be read. The `Fast-Die CE` counters were observed empty under the recorded M4
 and M6 workloads; channel names being present does not mean they yielded
 usable readings.
 

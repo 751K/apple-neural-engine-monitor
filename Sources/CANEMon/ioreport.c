@@ -30,6 +30,14 @@ struct anemon_ior {
 
 static int has_prefix_ci(const char *s, const char *p) { return strncasecmp(s, p, strlen(p)) == 0; }
 
+// "ANE DCS ..." (M4) or "ANE<n> DCS ..." (one per engine, M6).
+static int is_ane_dcs(const char *s) {
+    if (strncasecmp(s, "ANE", 3) != 0) return 0;
+    s += 3;
+    while (*s >= '0' && *s <= '9') s++;
+    return strncasecmp(s, " DCS ", 5) == 0;
+}
+
 static void cfstr(CFStringRef s, char *buf, size_t n) {
     buf[0] = 0;
     if (s) CFStringGetCString(s, buf, (CFIndex)n, kCFStringEncodingUTF8);
@@ -100,7 +108,8 @@ int anemon_ior_sample(anemon_ior *r, uint64_t *rd, uint64_t *wr, uint64_t *irqs,
         cfstr(r->subgroup(ch), sub, sizeof sub);
         cfstr(r->name(ch), name, sizeof name);
         // DCS = DRAM controller side; the AF (fabric) counters overlap with it.
-        if (strcmp(grp, "AMC Stats") == 0 && has_prefix_ci(name, "ANE DCS ")) {
+        // Chips with two engines report each one; their traffic is summed.
+        if (strcmp(grp, "AMC Stats") == 0 && is_ane_dcs(name)) {
             *found |= ANEMON_IOR_DRAM;
             int64_t v = r->int_value(ch, 0);
             if (v <= 0) continue;

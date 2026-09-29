@@ -54,15 +54,18 @@ ANE power was **not read**: calibration printed `idle n/a / max n/a`.
 IOReport `Energy Model` subscription returned GPU/PCIe channels but no ANE
 energy channel. The reported 136.8 GB/s read-bandwidth figure was the
 benchmark-throughput fallback, not a direct DRAM-counter measurement. Live
-`dram_read_gbs` / `dram_write_gbs` remain unavailable on this M6 build: IOReport
-names the channels `ANE0 DCS RD/WR` and `ANE1 DCS RD/WR`, while the current
-reader only recognizes the older `ANE DCS ...` naming pattern.
+`dram_read_gbs` / `dram_write_gbs` remain unavailable on this M6 build. IOReport
+lists the channels in `AMC Stats / Perf Counters` as `ANE0 DCS RD/WR` and
+`ANE1 DCS RD/WR` (anemon matches these names and sums the two engines; the
+separate `ANEXL0/1 DCS` channels are not included), but
+`IOReportCreateSubscription` returns NULL for that group, even for only the
+ANE DCS channels and even as root. On M4 the same subscription works without root.
 
 The machine exposes `ANE0` and `ANE1` in other IOReport groups, including
 `PMP / Fast-Die CE` and `SoC Stats`. These are activity/state counters, not ANE
-watts; anemon does not currently use them as a power substitute. IOReport
-exposes `ANE0` and `ANE1`, but per-engine busy reporting has not yet been
-independently validated by the calibration check.
+watts; anemon does not currently use them as a power substitute. Per-engine
+busy reporting has not yet been independently validated by the calibration
+check.
 
 ## Metrics
 
