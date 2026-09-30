@@ -251,6 +251,11 @@ anemon 99.3% at full duty and 53.9% vs 54.4% at 50% duty, with two stacked
 layers (18.6 ms per evaluation); 37.2 INT8 TOPS, 4.06 W peak power,
 66.6 GB/s read bandwidth.
 
+A MacBook Air M4 with SIP enabled (macOS 27.0.1, 37 hours asleep since boot)
+behaved the same: driver events only, 98.9% busy and 95 tasks/s on a 10.5 ms
+convolution, 3.41 W from `powermetrics`, and DRAM from the AMC byte counters
+without root.
+
 ### M6 (h18g, 32 cores, macOS 27.0.1)
 
 Calibration measured 75.9 INT8 TOPS. The two engines run each evaluation in
