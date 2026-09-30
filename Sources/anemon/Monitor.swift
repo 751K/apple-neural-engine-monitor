@@ -21,12 +21,31 @@ struct Snapshot {
     var estimatedPct: [Double] = []     // share of tasks whose start was inferred
     var programs: [ProgramStats] = []
     var powerW: Double?
+    var powerSource: String?            // "powermetrics" or "smc_estimate"
     var dramReadGBs: Double?
     var dramWriteGBs: Double?
+    var dramSource: String?             // "amc" (byte counters) or "histogram"
+    var dramClippedPct: Double?         // histogram samples in the top bin
+    var railW: Double?                  // raw inputs of the SMC power estimate
+    var pclusterW: Double?
     var interruptsPerS: Double?
     var traceErrors = 0
     var traceEventsPerS = 0.0
     var traceRestarts = 0
+}
+
+/// Per-architecture knowledge for sources that need it.
+struct ChipModel {
+    /// PMP "DCS BW" histogram samples per second on one fully active link:
+    /// 24 MHz / 5400 on h18g (measured 4438–4453/s at 100% duty).
+    var histSamplesPerS: Double?
+    /// SMC power key for the rail that feeds the ANE. On h18g, PP0b also
+    /// feeds the P-cores, whose power IOReport reports separately.
+    var aneRail: String?
+
+    static let known: [String: ChipModel] = [
+        "h18g": ChipModel(histSamplesPerS: 24e6 / 5400, aneRail: "PP0b"),
+    ]
 }
 
 /// Collects snapshots at a fixed interval from the available sources.
@@ -35,12 +54,22 @@ final class Monitor {
     private(set) var trace: ANETrace?
     private(set) var traceError: String?
     private var power: PowerMetrics?
+    private var rail: SMCRail?
+    /// rail - P-cluster while the ANE is idle: the rest of the rail's load
+    /// plus the bias of the 1 W-wide cluster histogram bins.
+    private var railOffsetW: Double?
+    /// Recent per-interval estimates while the ANE is active.
+    private var recentPowerW: [Double] = []
     private let counters = ANECounters()
+    let chipModel: ChipModel?
     private let intervalS: Double
     // kdebug records reach us with some delay; account a window that ends
     // this far in the past so late events still land in the right window.
     private let lagNs = 250e6
     private var lastTo: Double = 0
+    /// When the IOReport counters were last sampled (ns); rates use the real
+    /// elapsed time, which runs longer than the nominal interval.
+    private var lastCountersNs = anemon_mach_to_ns(anemon_mach_now())
     /// Consecutive intervals with ANE activity in IOReport but no task events.
     private var silentActive = 0
     private var unsupported = false
@@ -74,6 +103,7 @@ final class Monitor {
     init(intervalS: Double, useTrace: Bool, usePower: Bool) {
         self.intervalS = intervalS
         profile = Profile.load(architecture: device.architecture)
+        chipModel = ChipModel.known[device.architecture]
         if useTrace {
             let t = ANETrace()
             do {
@@ -83,11 +113,16 @@ final class Monitor {
                 traceError = "\(error)"
             }
         }
-        if usePower { power = PowerMetrics(intervalMs: Int(intervalS * 1000)) }
+        if usePower {
+            power = PowerMetrics(intervalMs: Int(intervalS * 1000))
+            rail = chipModel?.aneRail.flatMap { SMCRail(key: $0) }
+        }
         lastTo = anemon_mach_to_ns(anemon_mach_now()) - lagNs
     }
 
-    var hasPower: Bool { power != nil }
+    var hasPower: Bool { power != nil || rail != nil }
+    /// The SMC estimate is running but has not seen an idle ANE yet.
+    var awaitingPowerBaseline: Bool { rail != nil && railOffsetW == nil }
 
     func snapshot() -> Snapshot {
         var s = Snapshot()
@@ -111,14 +146,72 @@ final class Monitor {
             s.traceRestarts = w.restarts
         }
         s.powerW = power?.watts
-        if let p = s.powerW { observedMaxPowerW = max(observedMaxPowerW, p) }
+        if s.powerW != nil { s.powerSource = "powermetrics" }
+        let railW = rail?.takeMean()
+        var pclusterW: Double?
+        var linkSamples: UInt64?
+        let nowNs = anemon_mach_to_ns(anemon_mach_now())
+        let dt = max((nowNs - lastCountersNs) / 1e9, 0.01)
+        lastCountersNs = nowNs
         if let c = counters?.sample() {
-            s.dramReadGBs = c.read.map { Double($0) / intervalS / 1e9 }
-            s.dramWriteGBs = c.write.map { Double($0) / intervalS / 1e9 }
-            s.interruptsPerS = c.interrupts.map { Double($0) / intervalS }
+            if c.found & Int32(ANEMON_IOR_DRAM) != 0 {
+                s.dramReadGBs = Double(c.dram_rd_bytes) / dt / 1e9
+                s.dramWriteGBs = Double(c.dram_wr_bytes) / dt / 1e9
+                s.dramSource = "amc"
+            } else if c.found & Int32(ANEMON_IOR_DRAM_HIST) != 0, let rate = chipModel?.histSamplesPerS {
+                s.dramReadGBs = c.hist_rd / rate / dt
+                s.dramWriteGBs = c.hist_wr / rate / dt
+                s.dramSource = "histogram"
+                s.dramClippedPct = c.hist_rd_samples > 0 ? 100 * Double(c.hist_rd_top) / Double(c.hist_rd_samples) : 0
+                linkSamples = c.hist_rd_samples
+            }
+            if c.found & Int32(ANEMON_IOR_INTERRUPTS) != 0 { s.interruptsPerS = Double(c.interrupts) / dt }
+            if c.found & Int32(ANEMON_IOR_PCLUSTER) != 0 { pclusterW = c.pcluster_w }
         }
         classify(&s)
+        s.railW = railW
+        s.pclusterW = pclusterW
+        if s.powerW == nil, let railW, let pclusterW {
+            estimatePower(&s, raw: railW - pclusterW, linkSamples: linkSamples)
+        }
+        if let p = s.powerW { observedMaxPowerW = max(observedMaxPowerW, p) }
         return s
+    }
+
+    /// ANE power from a shared SMC rail: rail minus P-cluster power, minus
+    /// what that difference reads while the ANE is idle. The ANE counts as
+    /// idle when its memory links are off or only trickling (links stay on
+    /// at the lowest bin for a few seconds after work stops) with no
+    /// interrupt traffic; without link histograms, when the trace saw no
+    /// tasks. Idle readings more than 1 W from the baseline (a CPU burst
+    /// caught by only one of the two sources) do not move it.
+    ///
+    /// The SMC updates the rail about once a second, out of phase with our
+    /// IOReport window, so a short CPU burst can land in the cluster reading
+    /// one interval before it reaches the rail. The median of the last three
+    /// estimates drops those single-interval dips.
+    private func estimatePower(_ s: inout Snapshot, raw: Double, linkSamples: UInt64?) {
+        let idle: Bool
+        if let n = linkSamples {
+            idle = n == 0 || ((s.dramReadGBs ?? 0) < 1 && (s.interruptsPerS ?? 0) < 50)
+        } else {
+            idle = (s.busyStatus == .measured || s.busyStatus == .idle) && s.busyPct.reduce(0, +) < 0.5
+        }
+        if idle {
+            if let off = railOffsetW {
+                if abs(raw - off) < 1 { railOffsetW = 0.8 * off + 0.2 * raw }
+            } else {
+                railOffsetW = raw
+            }
+            recentPowerW.removeAll()
+            s.powerW = 0
+        } else if let off = railOffsetW {
+            recentPowerW.append(max(0, raw - off))
+            if recentPowerW.count > 3 { recentPowerW.removeFirst() }
+            let v = recentPowerW.sorted()
+            s.powerW = v.count == 2 ? (v[0] + v[1]) / 2 : v[v.count / 2]
+        }
+        if s.powerW != nil { s.powerSource = "smc_estimate" }
     }
 
     /// Tells an idle ANE apart from one whose task events this chip or OS does
@@ -152,5 +245,6 @@ final class Monitor {
     func stop() {
         trace?.stop()
         power?.stop()
+        rail?.stop()
     }
 }

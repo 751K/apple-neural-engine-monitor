@@ -6,7 +6,7 @@ A terminal monitor for the Apple Neural Engine (ANE) on Apple Silicon Macs.
 sudo .build/make/anemon calibrate  # once per machine: measure limits, check busy %
 sudo .build/make/anemon            # full-screen view, q to quit
 sudo .build/make/anemon --json     # one JSON object per interval
-     .build/make/anemon --json     # without root: IOReport counters, when available
+     .build/make/anemon --json     # without root: DRAM, interrupts and (M6) power
 ```
 
 Options: `--interval SECONDS` (default 1), `--count N`, `--no-power`.
@@ -49,23 +49,43 @@ On one 32-core M6, calibration reported 76.9 INT8 TOPS and passed the busy-%
 check: at 100% duty, host 100.0% vs anemon 95.3%; at 50% duty, host 49.4% vs
 anemon 46.8%. These results validate ANE task timing for those test workloads.
 
-ANE power was **not read**: calibration printed `idle n/a / max n/a`.
-`powermetrics` plist samples had no `processor.ane_power` field, and an
-IOReport `Energy Model` subscription returned GPU/PCIe channels but no ANE
-energy channel. The reported 136.8 GB/s read-bandwidth figure was the
-benchmark-throughput fallback, not a direct DRAM-counter measurement. Live
-`dram_read_gbs` / `dram_write_gbs` remain unavailable on this M6 build. IOReport
-lists the channels in `AMC Stats / Perf Counters` as `ANE0 DCS RD/WR` and
-`ANE1 DCS RD/WR` (anemon matches these names and sums the two engines; the
-separate `ANEXL0/1 DCS` channels are not included), but
-`IOReportCreateSubscription` returns NULL for that group, even for only the
-ANE DCS channels and even as root. On M4 the same subscription works without root.
+The M4 sources for power and DRAM traffic do not work on this M6:
+`powermetrics` reports no ANE power (and 0 mW CPU power), and the AMC
+`ANE0/ANE1 DCS` byte counters are listed but `IOReportCreateSubscription`
+returns NULL for them, even as root. anemon uses two other sources there,
+neither of which needs root. Both are specific to h18g (`ChipModel` in
+`Monitor.swift`); other chips report null until they are characterized.
 
-The machine exposes `ANE0` and `ANE1` in other IOReport groups, including
-`PMP / Fast-Die CE` and `SoC Stats`. These are activity/state counters, not ANE
-watts; anemon does not currently use them as a power substitute. Per-engine
-busy reporting has not yet been independently validated by the calibration
-check.
+**DRAM traffic** comes from the `PMP / DCS BW` histograms for the four ANE
+memory links (`ANE0 L0/L1`, `ANE1 L0/L1`, RD and WR). Each has 1 GB/s bins
+up to 32 GB/s and is sampled 24 MHz / 5400 = 4444 times per second, but only
+while the link is on. anemon sums bin midpoint × samples over the links and
+divides by that rate and the elapsed time. With a streaming FP16 GEMV
+(anebench, weights read once per evaluation):
+
+| Duty | Weight bytes / time | anemon |
+|---:|---:|---:|
+| 100% | 133.5 GB/s | 115 GB/s (80% of samples in the top bin) |
+| 50% | 59.8 GB/s | 50–55 GB/s |
+| 25% | 28.1 GB/s | 25 GB/s |
+
+The top bin is open-ended, so a link above 32 GB/s is counted at 32 and the
+figure becomes a lower bound. `dram_clipped_pct` gives the share of read
+samples in that bin; the TUI flags it above 10%.
+
+**ANE power** is an estimate. SMC key `PP0b` is a rail shared by the ANE and
+the P-cores: one busy P-core adds about 6 W, a full INT8 ANE load about
+5.3 W, and both together add up. IOReport's `PMP / Energy` histograms give
+P-cluster power (`PACC0` plus `PACC0 SRAM`) in 1 W bins. anemon reports
+`PP0b − P-cluster − baseline`, where the baseline is that difference while
+the ANE is idle (its links off or trickling below 1 GB/s with fewer than 50
+interrupts/s), learned while running. Until the first idle interval the
+power field stays null. The SMC updates `PP0b` about once a second, out of
+phase with anemon's window, so each value is the median of the last three
+intervals. On the M6 it read 5.2–5.4 W for the INT8 convolution stack (rail
+rise 5.3 W) and 0.8 W for the GEMV at 50% duty. `ane_power_source` is
+`smc_estimate` for these values and `powermetrics` where that tool reports
+ANE power.
 
 ## Metrics
 
@@ -74,8 +94,8 @@ check.
 | busy % | Share of wall time the ANE was executing a task | kdebug firmware task events | yes |
 | tasks/s, ms/task | Completed ANE tasks and their mean execution time | same | yes |
 | programs | Busy time and task rate per compiled program (model) handle | same | yes |
-| power | ANE power estimate, when exposed by the sampler; otherwise null | `powermetrics` | yes |
-| DRAM read/write | ANE traffic at the DRAM controllers, when recognized; otherwise null | IOReport | no |
+| power | ANE power estimate | `powermetrics`; on h18g an SMC rail minus IOReport P-cluster power | powermetrics: yes; SMC: no |
+| DRAM read/write | ANE traffic at the DRAM controllers | IOReport AMC byte counters (M4); on h18g the PMP link histograms | no |
 | interrupts | ANE interrupt rate | IOReport | no |
 
 The JSON output also reports:
@@ -87,11 +107,18 @@ The JSON output also reports:
   `unsupported` when IOReport shows the ANE working but no task events arrive
   on that chip or macOS version. In that case `ane_busy_pct` is null rather
   than 0.
+- `ane_power_source`: `powermetrics` or `smc_estimate`.
+- `dram_source`: `amc` (byte counters) or `histogram`, and
+  `dram_clipped_pct`: for histograms, the share of read samples in the
+  open-ended top bin. A high value means `dram_read_gbs` is a lower bound.
 - `validated` and `calibrated`.
 
-An unavailable or unrecognized counter is null, not 0. Calibration may report
-an estimated bandwidth fallback when direct DRAM counters are unavailable;
-that estimate does not populate the live `dram_read_gbs` field.
+With `ANEMON_DEBUG=1` in the environment the JSON also carries the raw inputs
+of the SMC estimate, `debug_rail_w` and `debug_pcluster_w`.
+
+An unavailable or unrecognized counter is null, not 0. Calibration uses the
+weight bytes per evaluation time of its bandwidth test when there are no byte
+counters, since the link histograms clip at full speed.
 
 **busy % is time occupancy, not compute utilization.** It says whether the ANE had
 work, like the GPU "active" figure, not how many of its cores or MAC units were

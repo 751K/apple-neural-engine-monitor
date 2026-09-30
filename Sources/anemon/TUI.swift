@@ -111,10 +111,13 @@ final class TUI {
             // Full scale: the highest ANE power measured on this chip (M4: 3.4 W
             // at 31 TOPS INT8), or the highest value seen so far on others.
             let scale = maxMeasured ? "" : ", scale = max seen"
-            o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W   \(esc)2m(powermetrics estimate%@)\(esc)0m\n",
-                        bar(p / maxW, barW), p, scale)
+            let src = s.powerSource == "smc_estimate" ? "SMC rail − P-cores, estimate" : "powermetrics estimate"
+            o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W   \(esc)2m(%@%@)\(esc)0m\n",
+                        bar(p / maxW, barW), p, src, scale)
         } else if !monitor.hasPower {
             o += "\(esc)2mPower      needs root (run with sudo)\(esc)0m\n"
+        } else if monitor.awaitingPowerBaseline {
+            o += "\(esc)2mPower      waiting for an idle ANE interval to set the baseline…\(esc)0m\n"
         } else {
             o += "\(esc)2mPower      waiting for powermetrics…\(esc)0m\n"
         }
@@ -122,8 +125,11 @@ final class TUI {
             o += String(format: "DRAM read  \(esc)35m%@\(esc)0m %6.1f GB/s  \(esc)2m(scale = calibrated %.0f GB/s)\(esc)0m\n",
                         bar(r / maxR, barW), r, maxR)
         }
-        let dram = s.dramReadGBs.map { r in String(format: "read %6.2f GB/s   write %6.2f GB/s", r, s.dramWriteGBs ?? 0) }
+        var dram = s.dramReadGBs.map { r in String(format: "read %6.2f GB/s   write %6.2f GB/s", r, s.dramWriteGBs ?? 0) }
             ?? "\(esc)2mn/a (no ANE DRAM counters on this chip)\(esc)0m"
+        if let c = s.dramClippedPct, c > 10 {
+            dram += String(format: "  \(esc)33m(lower bound: %.0f%% of samples at the histogram top)\(esc)0m", c)
+        }
         let irq = s.interruptsPerS.map { String(format: "interrupts %7.0f/s", $0) } ?? "\(esc)2minterrupts n/a\(esc)0m"
         o += "DRAM       \(dram)   \(irq)\n"
         o += "\n"

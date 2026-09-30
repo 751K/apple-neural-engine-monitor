@@ -1,6 +1,14 @@
-// ANE memory traffic and interrupt counters from the private IOReport
-// library, loaded with dlopen so the binary does not need its stub.
-// Works without root.
+// ANE memory traffic, interrupt counters and CPU cluster power from the
+// private IOReport library, loaded with dlopen so the binary does not need
+// its stub. Works without root.
+//
+// Sources, each subscribed only if the kernel accepts it on its own (a group
+// that cannot be subscribed would otherwise be dropped silently from a merged
+// subscription):
+//   AMC Stats / Perf Counters   exact ANE DRAM bytes ("ANE DCS RD/WR"; M4)
+//   PMP / DCS BW                per-link ANE bandwidth histograms ("ANE0 L0 RD"; M6)
+//   PMP / Energy                CPU cluster power histograms ("PACC0", "PACC0 SRAM")
+//   Interrupt Statistics        ANE interrupt counts
 
 #include "canemon.h"
 
@@ -16,21 +24,28 @@ typedef CFDictionaryRef (*create_samples_fn)(void *, CFMutableDictionaryRef, CFT
 typedef CFDictionaryRef (*samples_delta_fn)(CFDictionaryRef, CFDictionaryRef, CFTypeRef);
 typedef CFStringRef (*get_str_fn)(CFDictionaryRef);
 typedef int64_t (*get_int_fn)(CFDictionaryRef, int32_t);
+typedef int32_t (*get_i32_fn)(CFDictionaryRef);
+typedef CFStringRef (*state_name_fn)(CFDictionaryRef, int32_t);
+typedef int64_t (*state_res_fn)(CFDictionaryRef, int32_t);
 
 struct anemon_ior {
     void *lib;
+    copy_group_fn copy_group;
+    merge_fn merge;
+    create_sub_fn create_sub;
     create_samples_fn create_samples;
     samples_delta_fn delta;
     get_str_fn group, subgroup, name;
     get_int_fn int_value;
+    get_i32_fn format, state_count;
+    state_name_fn state_name;
+    state_res_fn residency;
     void *sub;
     CFMutableDictionaryRef subbed;
     CFDictionaryRef prev;
 };
 
-static int has_prefix_ci(const char *s, const char *p) { return strncasecmp(s, p, strlen(p)) == 0; }
-
-// "ANE DCS ..." (M4) or "ANE<n> DCS ..." (one per engine, M6).
+// "ANE DCS ..." (M4) or "ANE<n> DCS ..." (one per engine).
 static int is_ane_dcs(const char *s) {
     if (strncasecmp(s, "ANE", 3) != 0) return 0;
     s += 3;
@@ -38,9 +53,75 @@ static int is_ane_dcs(const char *s) {
     return strncasecmp(s, " DCS ", 5) == 0;
 }
 
+// PMP DCS BW link histogram: "ANE<n> L<n> RD" or "... WR" (not "RD+WR").
+// Returns 1 for read, 2 for write, 0 otherwise.
+static int ane_link_dir(const char *s) {
+    if (strncmp(s, "ANE", 3) != 0) return 0;
+    s += 3;
+    if (*s < '0' || *s > '9') return 0;
+    while (*s >= '0' && *s <= '9') s++;
+    if (strncmp(s, " L", 2) != 0) return 0;
+    s += 2;
+    if (*s < '0' || *s > '9') return 0;
+    while (*s >= '0' && *s <= '9') s++;
+    if (strcmp(s, " RD") == 0) return 1;
+    if (strcmp(s, " WR") == 0) return 2;
+    return 0;
+}
+
+// P-cluster power histograms: "PACC<n>" and "PACC<n> SRAM".
+static int is_pcluster(const char *s) {
+    if (strncmp(s, "PACC", 4) != 0) return 0;
+    s += 4;
+    if (*s < '0' || *s > '9') return 0;
+    while (*s >= '0' && *s <= '9') s++;
+    return *s == 0 || strcmp(s, " SRAM") == 0;
+}
+
+// Interrupt subgroups: "ane 2" (M4) or "ane1 2" (second engine).
+static int is_ane_irq(const char *s) {
+    if (strncasecmp(s, "ane", 3) != 0) return 0;
+    s += 3;
+    while (*s >= '0' && *s <= '9') s++;
+    return *s == ' ';
+}
+
 static void cfstr(CFStringRef s, char *buf, size_t n) {
     buf[0] = 0;
     if (s) CFStringGetCString(s, buf, (CFIndex)n, kCFStringEncodingUTF8);
+}
+
+typedef int (*keep_fn)(const char *name);
+static int keep_ane_dcs(const char *n) { return is_ane_dcs(n); }
+static int keep_ane_link(const char *n) { return ane_link_dir(n) != 0; }
+static int keep_pcluster(const char *n) { return is_pcluster(n); }
+
+// Copies a group's channels, keeping those accepted by keep (NULL = all),
+// and returns them only if they can be subscribed on their own.
+static CFMutableDictionaryRef usable(anemon_ior *r, CFStringRef group, CFStringRef subgroup, keep_fn keep) {
+    CFMutableDictionaryRef d = r->copy_group(group, subgroup, 0, 0, 0);
+    if (!d) return NULL;
+    if (keep) {
+        CFArrayRef a = CFDictionaryGetValue(d, CFSTR("IOReportChannels"));
+        CFMutableArrayRef f = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+        char name[128];
+        for (CFIndex i = 0; a && i < CFArrayGetCount(a); i++) {
+            CFDictionaryRef ch = CFArrayGetValueAtIndex(a, i);
+            cfstr(r->name(ch), name, sizeof name);
+            if (keep(name)) CFArrayAppendValue(f, ch);
+        }
+        CFDictionarySetValue(d, CFSTR("IOReportChannels"), f);
+        CFRelease(f);
+    }
+    CFArrayRef a = CFDictionaryGetValue(d, CFSTR("IOReportChannels"));
+    CFMutableDictionaryRef subbed = NULL;
+    void *sub = a && CFArrayGetCount(a) > 0 ? r->create_sub(NULL, d, &subbed, 0, NULL) : NULL;
+    if (subbed) CFRelease(subbed);
+    if (!sub) {
+        CFRelease(d);
+        return NULL;
+    }
+    return d;
 }
 
 anemon_ior *anemon_ior_open(void) {
@@ -48,35 +129,47 @@ anemon_ior *anemon_ior_open(void) {
     if (!lib) return NULL;
     anemon_ior *r = calloc(1, sizeof(*r));
     r->lib = lib;
-    copy_group_fn copy_group = (copy_group_fn)dlsym(lib, "IOReportCopyChannelsInGroup");
-    merge_fn merge = (merge_fn)dlsym(lib, "IOReportMergeChannels");
-    create_sub_fn create_sub = (create_sub_fn)dlsym(lib, "IOReportCreateSubscription");
+    r->copy_group = (copy_group_fn)dlsym(lib, "IOReportCopyChannelsInGroup");
+    r->merge = (merge_fn)dlsym(lib, "IOReportMergeChannels");
+    r->create_sub = (create_sub_fn)dlsym(lib, "IOReportCreateSubscription");
     r->create_samples = (create_samples_fn)dlsym(lib, "IOReportCreateSamples");
     r->delta = (samples_delta_fn)dlsym(lib, "IOReportCreateSamplesDelta");
     r->group = (get_str_fn)dlsym(lib, "IOReportChannelGetGroup");
     r->subgroup = (get_str_fn)dlsym(lib, "IOReportChannelGetSubGroup");
     r->name = (get_str_fn)dlsym(lib, "IOReportChannelGetChannelName");
     r->int_value = (get_int_fn)dlsym(lib, "IOReportSimpleGetIntegerValue");
-    if (!copy_group || !merge || !create_sub || !r->create_samples || !r->delta || !r->group ||
-        !r->subgroup || !r->name || !r->int_value) {
+    r->format = (get_i32_fn)dlsym(lib, "IOReportChannelGetFormat");
+    r->state_count = (get_i32_fn)dlsym(lib, "IOReportStateGetCount");
+    r->state_name = (state_name_fn)dlsym(lib, "IOReportStateGetNameForIndex");
+    r->residency = (state_res_fn)dlsym(lib, "IOReportStateGetResidency");
+    if (!r->copy_group || !r->merge || !r->create_sub || !r->create_samples || !r->delta || !r->group ||
+        !r->subgroup || !r->name || !r->int_value || !r->format || !r->state_count || !r->state_name ||
+        !r->residency) {
         anemon_ior_close(r);
         return NULL;
     }
 
-    CFMutableDictionaryRef chans = copy_group(CFSTR("AMC Stats"), CFSTR("Perf Counters"), 0, 0, 0);
-    CFMutableDictionaryRef irq = copy_group(CFSTR("Interrupt Statistics (by index)"), NULL, 0, 0, 0);
-    if (!chans) {
-        chans = irq;
-        irq = NULL;
-    } else if (irq) {
-        merge(chans, irq, NULL);
-        CFRelease(irq);
+    CFMutableDictionaryRef parts[] = {
+        usable(r, CFSTR("AMC Stats"), CFSTR("Perf Counters"), keep_ane_dcs),
+        usable(r, CFSTR("PMP"), CFSTR("DCS BW"), keep_ane_link),
+        usable(r, CFSTR("PMP"), CFSTR("Energy"), keep_pcluster),
+        usable(r, CFSTR("Interrupt Statistics (by index)"), NULL, NULL),
+    };
+    CFMutableDictionaryRef chans = NULL;
+    for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) {
+        if (!parts[i]) continue;
+        if (!chans) {
+            chans = parts[i];
+        } else {
+            r->merge(chans, parts[i], NULL);
+            CFRelease(parts[i]);
+        }
     }
     if (!chans) {
         anemon_ior_close(r);
         return NULL;
     }
-    r->sub = create_sub(NULL, chans, &r->subbed, 0, NULL);
+    r->sub = r->create_sub(NULL, chans, &r->subbed, 0, NULL);
     CFRelease(chans);
     if (!r->sub || !r->subbed) {
         anemon_ior_close(r);
@@ -85,9 +178,15 @@ anemon_ior *anemon_ior_open(void) {
     return r;
 }
 
-int anemon_ior_sample(anemon_ior *r, uint64_t *rd, uint64_t *wr, uint64_t *irqs, int *found) {
-    *rd = *wr = *irqs = 0;
-    *found = 0;
+// Histogram states are named like "  32GB/s" or " 0.250W": the leading number.
+static double state_value(anemon_ior *r, CFDictionaryRef ch, int32_t i) {
+    char buf[64];
+    cfstr(r->state_name(ch, i), buf, sizeof buf);
+    return atof(buf);
+}
+
+int anemon_ior_sample(anemon_ior *r, anemon_ior_values *v) {
+    memset(v, 0, sizeof *v);
     CFDictionaryRef cur = r->create_samples(r->sub, r->subbed, NULL);
     if (!cur) return -1;
     if (!r->prev) {
@@ -110,17 +209,61 @@ int anemon_ior_sample(anemon_ior *r, uint64_t *rd, uint64_t *wr, uint64_t *irqs,
         // DCS = DRAM controller side; the AF (fabric) counters overlap with it.
         // Chips with two engines report each one; their traffic is summed.
         if (strcmp(grp, "AMC Stats") == 0 && is_ane_dcs(name)) {
-            *found |= ANEMON_IOR_DRAM;
-            int64_t v = r->int_value(ch, 0);
-            if (v <= 0) continue;
+            v->found |= ANEMON_IOR_DRAM;
+            int64_t x = r->int_value(ch, 0);
+            if (x <= 0) continue;
             size_t len = strlen(name);
-            if (len >= 2 && strcmp(name + len - 2, "RD") == 0) *rd += (uint64_t)v;
-            else if (len >= 2 && strcmp(name + len - 2, "WR") == 0) *wr += (uint64_t)v;
-        } else if (strncmp(grp, "Interrupt Statistics", 20) == 0 && has_prefix_ci(sub, "ane ") &&
+            if (len >= 2 && strcmp(name + len - 2, "RD") == 0) v->dram_rd_bytes += (uint64_t)x;
+            else if (len >= 2 && strcmp(name + len - 2, "WR") == 0) v->dram_wr_bytes += (uint64_t)x;
+        } else if (strcmp(grp, "PMP") == 0 && strcmp(sub, "DCS BW") == 0 && r->format(ch) == 2) {
+            // Each state is a GB/s bin named by its upper edge ("1GB/s" holds
+            // an active but nearly idle link); residency counts samples taken
+            // while the link was active. Sum of bin midpoint * count, per
+            // direction. The top bin is open-ended and counted at its edge.
+            int dir = ane_link_dir(name);
+            if (!dir) continue;
+            v->found |= ANEMON_IOR_DRAM_HIST;
+            int32_t c = r->state_count(ch);
+            uint64_t samples = 0;
+            double lower = 0;
+            for (int32_t j = 0; j < c; j++) {
+                double upper = state_value(r, ch, j);
+                double mid = j == c - 1 ? upper : (lower + upper) / 2;
+                lower = upper;
+                int64_t res = r->residency(ch, j);
+                if (res <= 0) continue;
+                samples += (uint64_t)res;
+                double gbs = mid * (double)res;
+                if (dir == 1) {
+                    v->hist_rd += gbs;
+                    if (j == c - 1) v->hist_rd_top += (uint64_t)res;
+                } else {
+                    v->hist_wr += gbs;
+                }
+            }
+            if (dir == 1) {
+                v->hist_rd_samples += samples;
+                v->hist_links++;
+            }
+        } else if (strcmp(grp, "PMP") == 0 && strcmp(sub, "Energy") == 0 && r->format(ch) == 2 &&
+                   is_pcluster(name)) {
+            // Watt bins sampled continuously: the count-weighted mean is the
+            // cluster's average power. Clusters and their SRAM are summed.
+            v->found |= ANEMON_IOR_PCLUSTER;
+            int32_t c = r->state_count(ch);
+            double sum = 0, cnt = 0;
+            for (int32_t j = 0; j < c; j++) {
+                int64_t res = r->residency(ch, j);
+                if (res <= 0) continue;
+                sum += state_value(r, ch, j) * (double)res;
+                cnt += (double)res;
+            }
+            if (cnt > 0) v->pcluster_w += sum / cnt;
+        } else if (strncmp(grp, "Interrupt Statistics", 20) == 0 && is_ane_irq(sub) &&
                    strstr(name, "First Level Interrupt Handler Count")) {
-            *found |= ANEMON_IOR_INTERRUPTS;
-            int64_t v = r->int_value(ch, 0);
-            if (v > 0) *irqs += (uint64_t)v;
+            v->found |= ANEMON_IOR_INTERRUPTS;
+            int64_t x = r->int_value(ch, 0);
+            if (x > 0) v->interrupts += (uint64_t)x;
         }
     }
     CFRelease(d);

@@ -54,24 +54,49 @@ uint64_t anemon_mach_now(void);
 // Opaque sampler over a fixed set of IOReport channels.
 typedef struct anemon_ior anemon_ior;
 
-// Simple integer channels are matched by group, subgroup (NULL = any) and
-// channel name. Returns NULL if libIOReport cannot be loaded.
+// Returns NULL if libIOReport cannot be loaded or no channel group of
+// interest can be subscribed.
 anemon_ior *anemon_ior_open(void);
 
 // Which counters a sample found. Channel names differ between chips, so a
 // missing channel must not be reported as zero traffic.
 enum {
-    ANEMON_IOR_DRAM = 1,        // AMC "ANE DCS RD/WR" channels present
-    ANEMON_IOR_INTERRUPTS = 2,  // "Interrupt Statistics" ane channels present
+    ANEMON_IOR_DRAM = 1,        // AMC "ANE DCS RD/WR" byte counters (M4)
+    ANEMON_IOR_INTERRUPTS = 2,  // "Interrupt Statistics" ane channels
+    ANEMON_IOR_DRAM_HIST = 4,   // PMP "DCS BW" per-link ANE bandwidth histograms (M6)
+    ANEMON_IOR_PCLUSTER = 8,    // PMP "Energy" P-cluster power histograms
 };
 
-// Takes a sample and writes deltas since the previous call:
-// DRAM bytes read/written by the ANE (AMC DCS counters) and ANE interrupt count.
-// *found receives a mask of ANEMON_IOR_* for the counters that exist.
+// Deltas since the previous sample.
+typedef struct {
+    int found;                  // mask of ANEMON_IOR_*
+    uint64_t dram_rd_bytes;     // AMC counters
+    uint64_t dram_wr_bytes;
+    uint64_t interrupts;
+    // Link histograms: sum over links and samples of the bin midpoint (GB/s).
+    // A sample is taken only while a link is active, at a fixed rate, so
+    // hist_rd / samples_per_s_per_link / seconds is the mean read GB/s.
+    double hist_rd, hist_wr;
+    uint64_t hist_rd_samples;   // read samples, all links
+    uint64_t hist_rd_top;       // read samples in the highest bin (clipped)
+    int hist_links;             // read links seen
+    double pcluster_w;          // mean P-cluster power incl. SRAM, all clusters
+} anemon_ior_values;
+
+// Takes a sample and writes deltas since the previous call into *v.
 // Returns 0 on success; the first call only primes the baseline and returns 1.
-int anemon_ior_sample(anemon_ior *r, uint64_t *rd_bytes, uint64_t *wr_bytes,
-                      uint64_t *interrupts, int *found);
+int anemon_ior_sample(anemon_ior *r, anemon_ior_values *v);
 
 void anemon_ior_close(anemon_ior *r);
+
+// ---- SMC ----------------------------------------------------------------
+
+// Opens the AppleSMC user client (no root needed). Returns 0 on success.
+int anemon_smc_open(void);
+
+// Reads a 4-byte float key such as "PP0b". Returns 0 on success.
+int anemon_smc_read_float(const char *key, float *out);
+
+void anemon_smc_close(void);
 
 #endif

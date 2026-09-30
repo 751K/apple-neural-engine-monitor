@@ -7,11 +7,12 @@ usage: sudo anemon [--interval SECONDS] [--json] [--count N] [--no-power]
 Monitors the Apple Neural Engine:
   busy %     time the ANE spent executing tasks (kdebug firmware events, root)
   tasks/s    completed ANE tasks, with average task duration
-  power      ANE power estimate from powermetrics (root; may be unavailable)
+  power      ANE power estimate from powermetrics (root), or on M6 (h18g) from
+             an SMC rail minus P-core power (no root needed)
   DRAM       ANE memory traffic and interrupt rate (IOReport, no root needed)
 
-Without root, only IOReport DRAM/interrupt counters can be available; some
-chips do not expose counters that anemon currently recognizes.
+Without root, busy % and powermetrics are unavailable; some chips do not
+expose counters that anemon currently recognizes.
 
 `anemon calibrate` runs reference workloads (about 90 s) to measure available
 power and bandwidth data, peak compute, and busy % against known duty cycles.
@@ -57,6 +58,8 @@ for sig in [SIGINT, SIGTERM, SIGHUP] {
     }
 }
 
+let debug = ProcessInfo.processInfo.environment["ANEMON_DEBUG"] != nil
+
 func jsonLine(_ s: Snapshot) -> String {
     var d: [String: Any] = [
         "timestamp": ISO8601DateFormatter().string(from: s.time),
@@ -82,8 +85,15 @@ func jsonLine(_ s: Snapshot) -> String {
         d["trace_error"] = monitor.traceError ?? NSNull()
     }
     d["ane_power_w"] = s.powerW ?? NSNull()
+    d["ane_power_source"] = s.powerSource ?? NSNull()
     d["dram_read_gbs"] = s.dramReadGBs ?? NSNull()
     d["dram_write_gbs"] = s.dramWriteGBs ?? NSNull()
+    d["dram_source"] = s.dramSource ?? NSNull()
+    d["dram_clipped_pct"] = s.dramClippedPct ?? NSNull()
+    if debug {
+        d["debug_rail_w"] = s.railW ?? NSNull()
+        d["debug_pcluster_w"] = s.pclusterW ?? NSNull()
+    }
     d["ane_interrupts_per_s"] = s.interruptsPerS ?? NSNull()
     let data = try! JSONSerialization.data(withJSONObject: d, options: [.sortedKeys])
     return String(decoding: data, as: UTF8.self)

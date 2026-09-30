@@ -3,9 +3,9 @@ import Foundation
 import IOKit
 
 /// ANE power estimate from the `ANE Power` line in `powermetrics` (root only).
-/// Availability varies by chip and OS. On the tested M6 / h18g with macOS
-/// 27.0.1, powermetrics emits no ANE field and IOReport's Energy Model group
-/// has no ANE energy channel, so the reading remains nil.
+/// Availability varies by chip and OS. On M6 / h18g with macOS 27.0.1,
+/// powermetrics emits no ANE field; Monitor then estimates ANE power from
+/// an SMC rail instead (see `ChipModel`).
 final class PowerMetrics {
     private let proc = Process()
     private let lock = NSLock()
@@ -53,30 +53,62 @@ final class PowerMetrics {
     }
 }
 
-/// ANE traffic and interrupt rates from IOReport (no root needed).
+/// ANE traffic, interrupt rates and P-cluster power from IOReport (no root needed).
 final class ANECounters {
     private let ior: OpaquePointer
 
     init?() {
         guard let r = anemon_ior_open() else { return nil }
         ior = r
-        var a: UInt64 = 0, b: UInt64 = 0, c: UInt64 = 0
-        var found: Int32 = 0
-        _ = anemon_ior_sample(ior, &a, &b, &c, &found)
+        var v = anemon_ior_values()
+        _ = anemon_ior_sample(ior, &v)
     }
 
-    /// Byte and interrupt deltas since the previous call. A counter whose
-    /// channels do not exist on this chip is nil rather than zero.
-    func sample() -> (read: UInt64?, write: UInt64?, interrupts: UInt64?)? {
-        var rd: UInt64 = 0, wr: UInt64 = 0, irq: UInt64 = 0
-        var found: Int32 = 0
-        guard anemon_ior_sample(ior, &rd, &wr, &irq, &found) == 0 else { return nil }
-        let dram = found & Int32(ANEMON_IOR_DRAM) != 0
-        let ints = found & Int32(ANEMON_IOR_INTERRUPTS) != 0
-        return (dram ? rd : nil, dram ? wr : nil, ints ? irq : nil)
+    /// Deltas since the previous call; check `found` before using a field.
+    func sample() -> anemon_ior_values? {
+        var v = anemon_ior_values()
+        guard anemon_ior_sample(ior, &v) == 0 else { return nil }
+        return v
     }
 
     deinit { anemon_ior_close(ior) }
+}
+
+/// Averages one SMC power key, read every 100 ms on a background thread.
+final class SMCRail {
+    let key: String
+    private let lock = NSLock()
+    private var sum = 0.0
+    private var count = 0
+    private var running = true
+
+    init?(key: String) {
+        var probe: Float = 0
+        guard anemon_smc_open() == 0, anemon_smc_read_float(key, &probe) == 0 else { return nil }
+        self.key = key
+        Thread.detachNewThread { [weak self] in
+            while let self, self.isRunning {
+                var w: Float = 0
+                if anemon_smc_read_float(self.key, &w) == 0 {
+                    self.lock.lock(); self.sum += Double(w); self.count += 1; self.lock.unlock()
+                }
+                usleep(100_000)
+            }
+        }
+    }
+
+    private var isRunning: Bool { lock.lock(); defer { lock.unlock() }; return running }
+
+    /// Mean watts since the previous call, or nil if no read succeeded.
+    func takeMean() -> Double? {
+        lock.lock(); defer { lock.unlock() }
+        guard count > 0 else { return nil }
+        let m = sum / Double(count)
+        sum = 0; count = 0
+        return m
+    }
+
+    func stop() { lock.lock(); running = false; lock.unlock() }
 }
 
 /// Static description of the ANE hardware from the H11ANEIn services.

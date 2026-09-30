@@ -13,8 +13,8 @@ result is recorded below; its raw captures are not part of these datasets.
 |---|---|---|
 | Is the ANE executing a task, and for how long? | kdebug firmware events `0x061b0125` (start) and `0x061b0126` (end) | yes |
 | Per-inference hardware counters | ANE PMU through `aned` (`kANEFPerformanceStatsMask`), only for the process that submits the request | no |
-| Power | `powermetrics -s cpu_power,ane_power`, if the sampler exposes ANE power | yes |
-| DRAM traffic, interrupts | IOReport `AMC Stats` and `Interrupt Statistics` | no |
+| Power | `powermetrics -s cpu_power,ane_power`, if the sampler exposes ANE power; on M6 an SMC rail estimate | powermetrics: yes |
+| DRAM traffic, interrupts | IOReport `AMC Stats` (M4) or `PMP / DCS BW` histograms (M6), and `Interrupt Statistics` | no |
 
 On the measured M4 / h16g system, the ANE IOReport energy reading stayed at 0
 even when sampled as root, while `powermetrics` reported estimates (about
@@ -31,9 +31,15 @@ model bytes per evaluation time because the live M6 DRAM fields remained
 null. IOReport lists the M6 counters in `AMC Stats / Perf Counters` as
 `ANE0 DCS RD/WR`, `ANE1 DCS RD/WR` and `ANEXL0/1 DCS RD/WR`, but
 `IOReportCreateSubscription` returns NULL for that group, even for only the
-eight ANE DCS channels and even as root, so no samples can be read. The `Fast-Die CE` counters were observed empty under the recorded M4
-and M6 workloads; channel names being present does not mean they yielded
-usable readings.
+eight ANE DCS channels and even as root, so no samples can be read. The
+`Fast-Die CE` counters were observed empty under the recorded M4 and M6
+workloads; channel names being present does not mean they yielded usable
+readings.
+
+anemon instead reads M6 ANE traffic from the `PMP / DCS BW` per-link
+histograms and estimates ANE power from SMC key `PP0b` (shared with the
+P-cores) minus the IOReport `PMP / Energy` P-cluster histograms. The top-level
+README describes both methods and their check against anebench workloads.
 
 ### M6 calibration result (h18g, 32 cores, macOS 27.0.1)
 

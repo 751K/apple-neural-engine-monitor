@@ -103,9 +103,10 @@ enum Calibrate {
             let job = runner.start(m.dir, seconds: 10)
             let snaps = sample(9, skip: 3)
             _ = job.finish()
-            maxRead = snaps.compactMap(\.dramReadGBs).max()
+            maxRead = snaps.compactMap { $0.dramSource == "amc" ? $0.dramReadGBs : nil }.max()
             if maxRead == nil, let r = job.result {
-                // No DRAM counters on this chip: fall back to weight bytes per second.
+                // No byte counters on this chip (link histograms clip at full
+                // speed): fall back to weight bytes per second.
                 maxRead = 2560.0 * 65536 * 2 / (r.msPerEval / 1e3) / 1e9
             }
         }

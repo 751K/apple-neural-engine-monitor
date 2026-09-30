@@ -7,7 +7,7 @@ let package = Package(
     targets: [
         .target(
             name: "CANEMon",
-            linkerSettings: [.linkedFramework("CoreFoundation")]
+            linkerSettings: [.linkedFramework("CoreFoundation"), .linkedFramework("IOKit")]
         ),
         .executableTarget(
             name: "anemon",
