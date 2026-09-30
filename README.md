@@ -109,7 +109,9 @@ busy % against the share of wall time spent in the ANE on the host:
 | two processes, 3.9 ms tasks | 100% | 99.9–100% |
 
 - Two processes: task events lost dropped from about 10% to 0.1%, and each program was attributed to its PID.
-- Peak INT8 throughput 75.9 TOPS.
+- Peak throughput with random inputs: INT8 85–91 TOPS, FP16 50 TOPS (eight
+  chained 3×3 convs, 512 channels). With all-zero inputs the same models run
+  10–20% faster (106 and 55 TOPS); the M4 shows no such difference.
 - DRAM against the weight traffic of an FP16 GEMV:
 
 | Duty | Weight traffic | anemon |
@@ -118,8 +120,10 @@ busy % against the share of wall time spent in the ANE on the host:
 | 50% | 59.8 GB/s | 50–55 GB/s |
 | 25% | 28.1 GB/s | 25 GB/s |
 
-- Power: an INT8 convolution load read 5.0–5.4 W against a 5.3 W rise in the
-  supply rail, and returned to 0 within two seconds. Generating text with a
+- Power at full INT8 load with random inputs: 14–16 W, matching the rise in
+  the supply rail within 0.2 W; the whole machine rose by about 21.5 W. The
+  same load with all-zero inputs reads about 5 W. Readings return to 0 within
+  two seconds. Generating text with a
   4B language model (Core ML, 85% busy, 74 GB/s read) read 2.4 W, while the
   whole machine drew 12.3 W. For a real model there is no independent ANE
   reading to check this against.

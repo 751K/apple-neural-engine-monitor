@@ -137,6 +137,17 @@ anerun *anerun_open(const char *model_dir, char *err, int errlen) {
         NSMutableArray *outObjs = [NSMutableArray array], *outIdx = [NSMutableArray array];
         for (NSUInteger i = 0; i < ins.count; i++) {
             IOSurfaceRef s = makeSurface(tensorBytes(ins[i]));
+            // Random FP16 inputs in [-2, 2], so no layer sees all-zero
+            // activations: the M6 ANE runs all-zero data 10-20% faster than
+            // real data (the M4 does not). ANERUN_FILL=zero keeps them zero.
+            const char *fill = getenv("ANERUN_FILL");
+            if (!(fill && strcmp(fill, "zero") == 0)) {
+                IOSurfaceLock(s, 0, NULL);
+                __fp16 *p = IOSurfaceGetBaseAddress(s);
+                size_t n = IOSurfaceGetAllocSize(s) / sizeof(__fp16);
+                for (size_t k = 0; k < n; k++) p[k] = (__fp16)((float)arc4random_uniform(65536) / 16384.0f - 2.0f);
+                IOSurfaceUnlock(s, 0, NULL);
+            }
             [surfaces addObject:(__bridge_transfer id)s];
             [inObjs addObject:[surfaceClass objectWithIOSurface:s]];
             [inIdx addObject:@(i)];

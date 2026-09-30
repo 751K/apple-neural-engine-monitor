@@ -52,7 +52,24 @@ The latest calibration (2026-09-30) passed the busy check:
 
 It also reported 75.9 INT8 TOPS, ANE power 0.00 W idle and 4.96 W under the
 INT8 convolution stack (SMC estimate), and 132.5 GB/s read bandwidth from
-weight bytes per evaluation time.
+weight bytes per evaluation time. Those runs fed all-zero inputs, which the
+M6 ANE processes faster and at far lower power than real data. anebench now
+fills inputs with random FP16 values by default (`ANERUN_FILL=zero` restores
+zeros). The same workloads on the M6, zero against random inputs:
+
+| Workload | Zero inputs | Random inputs |
+|---|---:|---:|
+| calibration peak (INT8 5×5, 1024 ch, 4 layers) | 80.1 TOPS, 5.1 W | 69.2 TOPS, 15.1 W |
+| INT8 3×3, 512 ch, 8 layers | 106 TOPS | 85–91 TOPS; 14–16 W over 30 s |
+| FP16 3×3, 512 ch, 8 layers | 55.5 TOPS | 50.1 TOPS |
+| calibration bandwidth (FP16 1×1 GEMV) | 131.8 GB/s, 2.6 W | 132.4 GB/s, 2.7 W |
+
+Power is anemon's SMC estimate; under random INT8 load it matched the rise of
+`PP0b` within 0.2 W, with P-cluster power unchanged, and `PDTR` (whole
+machine) rose from 1.2 W to 23–26 W. Over 30 s at full load the reading fell
+from 16.0 W to 14.0 W. On the M4, zero and random inputs give the same
+throughput (36.5 against 36.7 TOPS, 18.8 against 18.8 TOPS); the M4 power
+figures below were measured with zero inputs.
 
 Earlier runs used a single layer, which takes only 3.9 ms per evaluation on
 the M6. anemon then read 92.9–95.3% against the host's 100%, and one run
