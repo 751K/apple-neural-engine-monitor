@@ -48,6 +48,9 @@ void anemon_kd_stop(void);
 // Converts mach absolute time to nanoseconds.
 double anemon_mach_to_ns(uint64_t t);
 uint64_t anemon_mach_now(void);
+// Continuous time minus absolute time, in ns: how long the Mac has slept
+// since boot.
+double anemon_slept_ns(void);
 
 // ---- IOReport -----------------------------------------------------------
 

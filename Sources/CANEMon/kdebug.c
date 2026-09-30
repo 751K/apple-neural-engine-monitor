@@ -115,3 +115,8 @@ double anemon_mach_to_ns(uint64_t t) {
 }
 
 uint64_t anemon_mach_now(void) { return mach_absolute_time(); }
+
+double anemon_slept_ns(void) {
+    uint64_t a = mach_absolute_time(), c = mach_continuous_time();
+    return c > a ? anemon_mach_to_ns(c - a) : 0;
+}

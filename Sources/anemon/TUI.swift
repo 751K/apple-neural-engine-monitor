@@ -92,7 +92,9 @@ final class TUI {
             o += "\(esc)33mANE busy   not available: IOReport shows ANE activity, but no ANE task events arrive\n"
             o += "           on this chip / macOS. Please report the output of calibration/scripts/trace_decode.sh.\(esc)0m\n"
         } else {
-            if s.busySource == .host {
+            if s.busySource == .host && s.sleptS > 1 {
+                o += String(format: "\(esc)2mANE busy from driver events: firmware task events are lost once the Mac has slept (%.0f min since boot); a reboot should restore them\(esc)0m\n", s.sleptS / 60)
+            } else if s.busySource == .host {
                 o += "\(esc)2mANE busy from driver submit/complete events (firmware events absent); includes queueing time\(esc)0m\n"
             } else if s.busyStatus == .unverified {
                 o += "\(esc)2mno ANE task events yet; idle cannot be confirmed from IOReport on this chip\(esc)0m\n"

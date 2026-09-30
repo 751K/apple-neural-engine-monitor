@@ -32,6 +32,11 @@ struct Snapshot {
     var traceErrors = 0
     var traceEventsPerS = 0.0
     var traceRestarts = 0
+    /// Time the Mac has slept since boot. Once it is non-zero the ANE driver
+    /// stamps firmware task events that far in the past (seen on M4, macOS
+    /// 27.0.1), and the kernel drops every one of them; only the driver's
+    /// submit/complete events remain until the next reboot.
+    var sleptS = 0.0
     var traceMaxLateMs = 0.0
     var traceLateTasks = 0
     var traceLateBusyMs = 0.0
@@ -151,6 +156,7 @@ final class Monitor {
             s.traceLateTasks = w.lateTasks
             s.traceLateBusyMs = w.lateBusyNs / 1e6
         }
+        s.sleptS = anemon_slept_ns() / 1e9
         s.powerW = power?.watts
         if s.powerW != nil { s.powerSource = "powermetrics" }
         let railW = rail?.takeMean()

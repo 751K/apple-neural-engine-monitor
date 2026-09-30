@@ -70,6 +70,7 @@ func jsonLine(_ s: Snapshot) -> String {
     if monitor.trace != nil {
         d["ane_busy_source"] = s.busySource.rawValue
         d["ane_busy_status"] = s.busyStatus.rawValue
+        d["slept_since_boot_s"] = s.sleptS
         // Unsupported: do not report a busy figure we cannot measure.
         d["ane_busy_pct"] = s.busyStatus == .unsupported ? NSNull() : s.busyPct as Any
         d["ane_tasks_per_s"] = s.tasksPerS

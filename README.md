@@ -45,18 +45,21 @@ undocumented macOS interfaces and may change between releases.
 
 | | M4 (h16g) | M6 (h18g), macOS 27.0.1 |
 |---|---|---|
-| busy %, tasks, programs | macOS 27.0: kdebug firmware task events, validated. macOS 27.0.1: driver events only (see below), busy check passed | firmware task events, busy check passed |
+| busy %, tasks, programs | kdebug firmware task events, validated; driver events after the Mac has slept (see below) | firmware task events, busy check passed |
 | DRAM | IOReport byte counters, exact | IOReport per-link bandwidth histograms, a lower bound at full speed |
 | power | `powermetrics` | SMC rail minus P-core power, an estimate |
 
-**The M4 firmware stopped logging task events with macOS 27.0.1.** Since
-that update (build 26A434) a 3-second capture of every event in the ANE
-subclass under full load contains no `0x061b0125`/`0x061b0126` and nothing
-stamped on the ANE's own trace CPU, whatever submits the work (anebench,
-Core ML, `powermetrics -s ane_power` beforehand). The driver's
-submit/complete events are still there, and anemon falls back to them (see
-[Driver events](#driver-events)). The M6 on the same build still logs
-firmware events.
+**After the Mac has slept, firmware task events are lost until the next
+reboot.** On an M4 with macOS 27.0.1 the ANE driver still passes every task
+event to `kernel_debug_enter` (seen with DTrace), but with a timestamp that
+lies in the past by exactly the time the Mac has slept since boot
+(`mach_continuous_time() − mach_absolute_time()`: 78.6 minutes on the machine
+tested). The kernel drops all of them as stale, so no firmware events reach
+anemon or `ktrace`. The driver's submit/complete events are unaffected, and
+anemon falls back to them (see [Driver events](#driver-events)); the TUI
+names the cause and JSON reports `slept_since_boot_s`. The M6 tested had not
+slept since boot and received firmware events normally. A reboot should
+restore the events until the next sleep; that has not been verified yet.
 
 On other chips busy % works if the firmware uses the same event codes; run
 `sudo anemon calibrate` to check. DRAM and power need chip-specific
@@ -225,7 +228,7 @@ Power from `powermetrics`: 0.66 W with tiny tasks, 2.1–2.6 W for FP16
 convolutions, 3.4 W for INT8 at 31 TOPS. Peak INT8 throughput: 38.2 TOPS
 against a theoretical 38.4.
 
-On macOS 27.0.1 (build 26A434), with driver events only, calibration passed
+After the machine had slept (macOS 27.0.1, build 26A434), with driver events only, calibration passed
 the busy check with 10.7 ms evaluations: host 100.0% vs anemon 98.9% at full
 duty, 50.8% vs 51.1% at 50% duty. It measured 35.4 INT8 TOPS, 3.87 W peak
 power and 66.0 GB/s read bandwidth.
