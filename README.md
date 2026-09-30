@@ -235,6 +235,11 @@ the busy check with 10.7 ms evaluations: host 100.0% vs anemon 98.9% at full
 duty, 50.8% vs 51.1% at 50% duty. It measured 35.4 INT8 TOPS, 3.87 W peak
 power and 66.0 GB/s read bandwidth.
 
+After a reboot, with firmware events again (macOS 27.0.1): host 100.0% vs
+anemon 99.3% at full duty and 53.9% vs 54.4% at 50% duty, with two stacked
+layers (18.6 ms per evaluation); 37.2 INT8 TOPS, 4.06 W peak power,
+66.6 GB/s read bandwidth.
+
 ### M6 (h18g, 32 cores, macOS 27.0.1)
 
 Calibration measured 75.9 INT8 TOPS. The two engines run each evaluation in
