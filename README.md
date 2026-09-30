@@ -119,8 +119,10 @@ busy % against the share of wall time spent in the ANE on the host:
 | 25% | 28.1 GB/s | 25 GB/s |
 
 - Power: an INT8 convolution load read 5.0–5.4 W against a 5.3 W rise in the
-  supply rail, and returned to 0 within two seconds. Not yet checked with a
-  real model.
+  supply rail, and returned to 0 within two seconds. Generating text with a
+  4B language model (Core ML, 85% busy, 74 GB/s read) read 2.4 W, while the
+  whole machine drew 12.3 W. For a real model there is no independent ANE
+  reading to check this against.
 
 ## Limitations
 

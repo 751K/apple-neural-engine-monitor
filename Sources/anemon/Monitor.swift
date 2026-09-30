@@ -68,6 +68,10 @@ final class Monitor {
     /// rail - P-cluster while the ANE is idle: the rest of the rail's load
     /// plus the bias of the 1 W-wide cluster histogram bins.
     private var railOffsetW: Double?
+    /// Recent idle readings of rail - P-cluster; the baseline is their median.
+    private var idleRawW: [Double] = []
+    /// Seconds the ANE has been idle without a break.
+    private var idleForS = 0.0
     /// Recent per-interval estimates while the ANE is active.
     private var recentPowerW: [Double] = []
     private let counters = ANECounters()
@@ -197,8 +201,12 @@ final class Monitor {
     /// idle when its memory links are off or only trickling (links stay on
     /// at the lowest bin for a few seconds after work stops) with no
     /// interrupt traffic; without link histograms, when the trace saw no
-    /// tasks. Idle readings more than 1 W from the baseline (a CPU burst
-    /// caught by only one of the two sources) do not move it.
+    /// tasks. The baseline is the median of the last eight idle readings,
+    /// set once there are three, so a CPU burst caught by only one of the two
+    /// sources (common in the first interval, while other tools start) does
+    /// not become the baseline. Readings from the first 2 s of an idle spell
+    /// are left out: the rail lags the ANE by about a second, and short gaps
+    /// between tasks otherwise pulled the baseline up by about 1 W.
     ///
     /// The SMC updates the rail about once a second, out of phase with our
     /// IOReport window, so a short CPU burst can land in the cluster reading
@@ -211,12 +219,13 @@ final class Monitor {
         } else {
             idle = (s.busyStatus == .measured || s.busyStatus == .idle) && s.busyPct.reduce(0, +) < 0.5
         }
+        idleForS = idle ? idleForS + intervalS : 0
         if idle {
-            if let off = railOffsetW {
-                if abs(raw - off) < 1 { railOffsetW = 0.8 * off + 0.2 * raw }
-            } else {
-                railOffsetW = raw
+            if idleForS > 2 {
+                idleRawW.append(raw)
+                if idleRawW.count > 8 { idleRawW.removeFirst() }
             }
+            if idleRawW.count >= 3 { railOffsetW = idleRawW.sorted()[idleRawW.count / 2] }
             recentPowerW.removeAll()
             s.powerW = 0
         } else if let off = railOffsetW {

@@ -251,10 +251,15 @@ P-cluster's power (`PACC0` plus `PACC0 SRAM`) in 1 W bins. anemon reports
 
     ANE power = PP0b − P-cluster power − baseline
 
-The baseline is the same difference while the ANE is idle, learned as anemon
-runs, so the power field stays null until the ANE has been idle for one
-interval. The ANE counts as idle when its links are off, or read less than
-1 GB/s with fewer than 50 interrupts/s. The SMC updates `PP0b` about once a
+The baseline is the median of the last eight readings of the same difference
+while the ANE is idle, learned as anemon runs; the power field stays null
+until the ANE has been idle for about five seconds. A single reading is not
+enough: when anemon starts together with other tools, the first interval can
+catch a P-core burst in only one of the two sources, and a baseline taken
+from it overstated ANE power by 3.5 W. Readings from the first 2 s of each
+idle spell are skipped, because the rail lags the ANE by about a second. The
+ANE counts as idle when its links are off, or read less than 1 GB/s with
+fewer than 50 interrupts/s. The SMC updates `PP0b` about once a
 second, out of step with anemon's interval, so a short CPU burst can reach
 the two sources one interval apart. Each value is the median of the last
 three intervals, which removes those dips.
