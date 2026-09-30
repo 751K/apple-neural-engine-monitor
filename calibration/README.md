@@ -43,19 +43,24 @@ README describes both methods and their check against anebench workloads.
 
 ### M6 calibration result (h18g, 32 cores, macOS 27.0.1)
 
-The duty-cycle validation passed within the 5-point tolerance:
+The latest calibration (2026-09-30) passed the busy check:
 
-| Duty | Host | anemon | Result |
+| Workload | Host | anemon | Result |
 |---|---:|---:|---|
-| 100% | 100.0% | 95.3% | pass |
-| 50% | 49.4% | 46.8% | pass |
+| a8w8 3×3 conv ×3, 10.3 ms/eval, 100% duty | 100.0% | 96.5% | pass |
+| same, 50% duty | 48.8% | 48.3% | pass |
 
-Calibration also reported 76.9 INT8 TOPS. ANE power was `n/a` at idle and
-under peak compute. Read bandwidth was 136.8 GB/s, but this used the benchmark
-fallback estimate rather than live DRAM counters. Therefore this M6 result
-validates busy-time measurement for these workloads, not ANE power or direct
-DRAM telemetry. Per-engine busy reporting has not been independently
-validated.
+It also reported 75.9 INT8 TOPS, ANE power 0.00 W idle and 4.96 W under the
+INT8 convolution stack (SMC estimate), and 132.5 GB/s read bandwidth from
+weight bytes per evaluation time.
+
+Earlier runs used a single layer, which takes only 3.9 ms per evaluation on
+the M6. anemon then read 92.9–95.3% against the host's 100%, and one run
+failed the 5-point check. Per-engine output showed both engines running each
+evaluation in lockstep at 250 tasks/s × 3.72 ms ≈ 93% busy; the remaining
+~0.19 ms per evaluation is submit and completion overhead that the host
+counts but the ANE spends idle. Calibration now stacks layers until one
+evaluation takes at least 10 ms.
 
 ### ANE task events (`data/trace/`)
 

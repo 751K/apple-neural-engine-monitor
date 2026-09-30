@@ -14,7 +14,7 @@ Monitors the Apple Neural Engine:
 Without root, busy % and powermetrics are unavailable; some chips do not
 expose counters that anemon currently recognizes.
 
-`anemon calibrate` runs reference workloads (about 90 s) to measure available
+`anemon calibrate` runs reference workloads (about 2 min) to measure available
 power and bandwidth data, peak compute, and busy % against known duty cycles.
 Power may be unavailable; bandwidth may be estimated if DRAM counters are
 missing. Results are saved for later runs.

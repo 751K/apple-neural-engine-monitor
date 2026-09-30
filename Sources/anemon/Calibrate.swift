@@ -62,7 +62,7 @@ enum Calibrate {
         let dev = monitor.device
         let os = ProcessInfo.processInfo.operatingSystemVersion
         print("Calibrating \(dev.chip) · ANE \(dev.architecture) · \(dev.cores) cores · macOS \(os.majorVersion)")
-        print("This takes about 90 seconds; keep other ANE and GPU work closed.\n")
+        print("This takes about two minutes; keep other ANE and GPU work closed.\n")
 
         func sample(_ seconds: Int, skip: Int = 2) -> [Snapshot] {
             var out: [Snapshot] = []
@@ -112,17 +112,31 @@ enum Calibrate {
         }
 
         // 4. Busy % against workloads whose share of wall time is known.
-        print("[4/4] busy % check (10 ms tasks at 100% and 50% duty)…")
+        print("[4/4] busy % check (tasks of at least 10 ms at 100% and 50% duty)…")
         var checks: [Profile.BusyCheck] = []
         var source = BusySource.none
-        if monitor.trace != nil, let m = runner.generate("busy", "a8w8", "conv", 1024, 1024, 128, 128, 3) {
+        // The host share includes the per-evaluation submit/complete overhead
+        // (about 0.2 ms), when the ANE is really idle. Stack layers until one
+        // evaluation takes at least 10 ms so that overhead stays near 2% on
+        // fast chips too (one layer takes 3.9 ms on M6, 10 ms on M4).
+        var busyModel = monitor.trace != nil ? runner.generate("busy", "a8w8", "conv", 1024, 1024, 128, 128, 3) : nil
+        var layers = 1
+        if let m = busyModel, let r = runner.start(m.dir, seconds: 2).finish(), r.msPerEval < 10 {
+            layers = Int((10 / r.msPerEval).rounded(.up))
+            busyModel = runner.generate("busy\(layers)", "a8w8", "conv", 1024, 1024, 128, 128, 3, layers: layers)
+        }
+        if let m = busyModel {
+            var evalMs = 0.0   // per evaluation, from the full-duty run
             for duty in [1.0, 0.5] {
                 let job = runner.start(m.dir, seconds: 9, duty: duty)
                 let snaps = sample(8, skip: 3)
                 guard let r = job.finish() else { continue }
-                let busy = median(snaps.compactMap { $0.busyStatus == .measured ? $0.busyPct.first : nil }) ?? 0
+                if duty == 1 { evalMs = r.msPerEval }
+                // Engines of a multi-ANE chip run one evaluation in lockstep:
+                // take the busiest one.
+                let busy = median(snaps.compactMap { $0.busyStatus == .measured ? $0.busyPct.max() : nil }) ?? 0
                 source = snaps.last?.busySource ?? source
-                checks.append(.init(workload: "a8w8 3x3 conv, duty \(Int(duty * 100))%",
+                checks.append(.init(workload: String(format: "a8w8 3x3 conv x%ld (%.1f ms/eval), duty %ld%%", layers, evalMs, Int(duty * 100)),
                                     hostBusyPct: r.hostBusyPct, anemonBusyPct: busy))
             }
         }

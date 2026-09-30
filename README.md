@@ -6,7 +6,7 @@ using it, how much memory traffic it generates and how much power it draws.
 
 ```
 make
-sudo .build/make/anemon calibrate   # once per machine, about 90 s
+sudo .build/make/anemon calibrate   # once per machine, about 2 min
 sudo .build/make/anemon             # full-screen view, q to quit
 sudo .build/make/anemon --json      # one JSON object per interval
      .build/make/anemon --json      # without root: DRAM, interrupts and, on M6, power
@@ -136,7 +136,7 @@ estimate, `debug_rail_w` and `debug_pcluster_w`.
 ## Calibration
 
 `sudo anemon calibrate` runs reference workloads through `anebench` for about
-90 seconds. Close other ANE and GPU work first. It measures whatever the
+two minutes. Close other ANE and GPU work first. It measures whatever the
 machine exposes of:
 
 - idle and maximum ANE power, with a stack of INT8 5×5 convolutions
@@ -144,8 +144,11 @@ machine exposes of:
 - read bandwidth, with an FP16 GEMV shaped like an LLM output head. Without
   byte counters this comes from weight bytes per evaluation time, because the
   link histograms clip at full speed
-- busy % against 10 ms tasks at 100% and 50% duty. The check passes if
-  anemon is within 5 percentage points of the share measured on the host
+- busy % against INT8 convolutions at 100% and 50% duty. The check passes if
+  anemon is within 5 percentage points of the share measured on the host.
+  The host share also counts about 0.2 ms of submit and completion overhead
+  per evaluation, when the ANE is idle, so calibration stacks layers until
+  one evaluation takes at least 10 ms and that overhead stays near 2%
 
 The profile is saved to `/Library/Application Support/anemon/<architecture>.json`.
 anemon uses it for the full scale of the power and DRAM bars, and treats busy %
@@ -180,8 +183,12 @@ against a theoretical 38.4.
 
 ### M6 (h18g, 32 cores, macOS 27.0.1)
 
-Calibration measured 76.9 INT8 TOPS. Busy check: host 100.0% vs anemon
-95.3% at full duty, 49.4% vs 46.8% at 50% duty.
+Calibration measured 75.9 INT8 TOPS. The two engines run each evaluation in
+lockstep and report the same busy %. Busy check with three stacked layers
+(10.3 ms per evaluation): host 100.0% vs anemon 96.5% at full duty, 48.8% vs
+48.3% at 50% duty. With a single layer (3.9 ms per evaluation) anemon read
+93%, which matches 250 tasks/s × 3.72 ms; the rest of the host's 100% was
+the overhead between evaluations.
 
 DRAM against the weight traffic of an FP16 GEMV, which reads its weights once
 per evaluation:
@@ -192,7 +199,7 @@ per evaluation:
 | 50% | 59.8 GB/s | 50–55 GB/s |
 | 25% | 28.1 GB/s | 25 GB/s |
 
-Power: the INT8 convolution stack read 5.2–5.4 W while `PP0b` rose by 5.3 W,
+Power: the INT8 convolution stack read 5.0–5.4 W while `PP0b` rose by 5.3 W,
 and the GEMV at 50% duty read 0.8 W. After the load stopped the reading
 returned to 0 within two seconds. Neither estimate has been checked against a
 real model yet.
@@ -204,8 +211,9 @@ real model yet.
 - At very high task rates (about 10k/s) the subclass produces over a million
   records per second, and anemon spends noticeable CPU decoding them.
 - Processes are not identified: task events carry a program handle, not a PID.
-- The M6 has two ANEs. Splitting busy % per engine is implemented but has not
-  been checked on its own.
+- busy % is reported per engine. On M6 both engines have so far always run
+  the same work in lockstep; separate workloads on the two engines have not
+  been tested.
 
 ## Repository
 
