@@ -134,6 +134,146 @@ Power has a large fixed floor, so power alone does not indicate utilization.
 Busy % agrees with duty-cycled workloads to within 3 percentage points, from
 idle to 99.5%.
 
+## How anemon reads each metric
+
+### Busy time
+
+The ANE firmware logs two kdebug events per task in class 0x06, subclass
+0x1b: code 0x49 with `DBG_FUNC_START` (`0x061b0125`) and `DBG_FUNC_END`
+(`0x061b0126`). Both carry the program handle in arg1 and a per-program
+transaction id in arg3.
+
+The kernel drops coprocessor events that arrive stamped earlier than its
+oldest valid time and leaves a `0x07020018` (past events) record instead
+(`bsd/kern/kdebug.c` in xnu). That time rises to the newest record returned by
+every read. ANE firmware events reach the kernel a fraction of a millisecond
+after the driver's own events for the same task, so when the reader keeps
+picking up other ANE driver events, some firmware events arrive already "in
+the past". Tracing the whole ANE subclass (about 90,000 driver events per
+second on M6) lost about 10% of the firmware events this way. anemon therefore
+records only the three event ids it uses (`KDBG_VALCHECK`, at most four ids);
+the M6 then lost about 0.1%.
+
+Some tasks still arrive without both events, and the firmware omits the start
+of many very short tasks. anemon charges each incomplete task the median
+duration of the program's recent complete tasks:
+
+- start only: from the start, for that duration
+- end only: that duration before the end
+- neither (a gap in the program's transaction ids): into the engine's idle
+  time since the program's previous task, latest first
+
+Busy time is the union of these intervals on each engine, so overlapping
+estimates are not counted twice. A task that has started but not ended counts
+as busy up to the end of the interval, so long inferences do not read as
+idle. The window lags real time by 250 ms because events reach the reader late.
+
+When no firmware events arrive, anemon falls back to the driver's
+submit/complete events (`0x061b00a0`).
+
+### Processes
+
+Neither the firmware events nor the driver's submit/complete events identify
+the process. The driver emits them from its own work loop thread. Event
+`0x061b0071` (the start of code 0x1c) does. The driver logs it on the calling
+thread each time a process submits a request, with the program handle in arg1.
+The first time anemon sees a handle, it takes the thread id from that record
+and finds the owning process by listing every process's threads
+(`proc_pidinfo`). Model names are not available, because no event carries
+one.
+
+`KERN_KDREADTR` returns at most about 3,900 records per call, so the reader
+drains the kernel buffer in a loop. Tracing runs in ring-buffer mode and is
+re-enabled if the kernel stops it.
+
+### Driver events
+
+The driver logs `0x061b00a0` when it submits a request (arg1 = 0) and when
+the firmware reports it complete (arg1 = 1), with the program handle in arg2
+and the transaction id in arg4. A span from submit to completion includes the
+time the request waited in the driver, but since one engine runs one task at
+a time, the union of the spans is still the time the ANE had work. The M6
+logs both kinds of events, so the same workloads were measured each way
+(`ANEMON_FORCE_HOST=1` ignores the firmware events):
+
+| Workload | Firmware events | Driver events |
+|---|---:|---:|
+| 10 ms evaluations, continuous | 96.7% | 97.6% |
+| 10 ms evaluations, 50% duty | 47.1% | 47.7% |
+| 3.9 ms evaluations, continuous | 92.9% | 94.2% |
+| 0.24 ms evaluations, continuous | 45.6% | 45.4% |
+| µs evaluations, 50% duty | 0.1% | 0.0% |
+| two processes, 3.9 ms each | 99.9% | 100.0% |
+
+Busy % from driver events is within about 1.5 points of the firmware figure.
+Task counts are not: the M6 driver logs one request per engine for each
+evaluation, so tasks/s is twice the evaluation rate. Driver events also
+cannot split busy time between engines, and they mark `ane_busy_source` as
+`host`.
+
+### DRAM traffic
+
+**M4:** the IOReport channels `AMC Stats / Perf Counters / ANE DCS RD` and
+`ANE DCS WR` count bytes at the DRAM controllers, with or without System
+Integrity Protection: a MacBook Air M4 with SIP enabled read 66.0 GB/s, the
+same as the weight traffic of the test GEMV. If the subscription ever fails
+on an M4, anemon falls back to the
+`PMP / DCS BW` histogram of its single ANE link (`ANE0 RD` / `ANE0 WR`),
+sampled about 4408 times per second while the link is on. That link's
+histogram also stops at 32 GB/s, about half of what the M4 ANE can read, so
+under heavy load the fallback reports roughly half the real traffic and flags
+it as clipped. With a streaming FP16 GEMV the byte counters read 65.5 GB/s
+and the fallback 32 GB/s (98% of samples in the top bin); at 50% duty,
+31.7 GB/s against 16 GB/s. `ANEMON_NO_AMC=1` forces the fallback for testing.
+
+**M6:** the same channels exist as `ANE0/ANE1 DCS RD/WR`, but the kernel
+refuses to subscribe to them, even for root. SIP does not explain it (the M4
+subscribes with SIP enabled), so it looks like a restriction of the newer
+chip. anemon reads `PMP / DCS BW` instead. It has a histogram for each of the four ANE memory links (`ANE0 L0`,
+`ANE0 L1`, `ANE1 L0`, `ANE1 L1`, read and write) with 1 GB/s bins up to
+32 GB/s. A link is sampled 24 MHz / 5400 = 4444 times per second while it is
+on. anemon sums bin midpoint × sample count over the links and divides by
+that rate and the elapsed time.
+
+The top bin is open-ended, so a link running above 32 GB/s is counted at 32.
+`dram_clipped_pct` is the share of read samples in that bin; above 10% the
+TUI marks the reading as a lower bound.
+
+### Power
+
+**M4:** the `ANE Power` line of `powermetrics`, which needs root.
+
+**M6:** `powermetrics` reports no ANE power, and IOReport has no ANE energy
+channel. The SMC power key `PP0b` is a rail shared by the ANE and the
+P-cores: one busy P-core adds about 6 W to it, a full INT8 ANE load about
+5.3 W, and the two add up. IOReport's `PMP / Energy` histograms give the
+P-cluster's power (`PACC0` plus `PACC0 SRAM`) in 1 W bins. anemon reports
+
+    ANE power = PP0b − P-cluster power − baseline
+
+The baseline is the same difference while the ANE is idle, learned as anemon
+runs, so the power field stays null until the ANE has been idle for one
+interval. The ANE counts as idle when its links are off, or read less than
+1 GB/s with fewer than 50 interrupts/s. The SMC updates `PP0b` about once a
+second, out of step with anemon's interval, so a short CPU burst can reach
+the two sources one interval apart. Each value is the median of the last
+three intervals, which removes those dips.
+
+### Firmware events after sleep
+
+On an M4 with macOS 27.0.1 the ANE driver still passes every task
+event to `kernel_debug_enter` (seen with DTrace), but with a timestamp that
+lies in the past by exactly the time the Mac has slept since boot
+(`mach_continuous_time() − mach_absolute_time()`: 78.6 minutes on the machine
+tested). The kernel drops all of them as stale, so no firmware events reach
+anemon or `ktrace`. The driver's submit/complete events are unaffected, and
+anemon falls back to them (see [Driver events](#driver-events)); the TUI
+names the cause and JSON reports `slept_since_boot_s`. The M6 tested had not
+slept since boot and received firmware events normally, and after a reboot
+the M4 did too (98.7% busy from firmware events on the same workload) until
+it sleeps again. To keep firmware events on a benchmark machine, disable
+system sleep.
+
 ## Reproducing
 
 Requirements:
