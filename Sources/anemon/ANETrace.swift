@@ -79,6 +79,11 @@ struct TraceWindow {
     var eventsRead: Int
     var restarts: Int
     var source: BusySource
+    /// Diagnostics: the longest delay from an event's timestamp to its read,
+    /// and tasks that ended inside a window that had already been accounted.
+    var maxLateNs: Double
+    var lateTasks: Int
+    var lateBusyNs: Double
 }
 
 /// Reads ANE task events from kdebug and turns them into busy time.
@@ -92,12 +97,19 @@ final class ANETrace {
     private var pendingStart: [TaskKey: (ts: Double, handle: UInt64, cpu: UInt32)] = [:]
     private var lastTxn: [ProgramKey: UInt64] = [:]
     private var lastEnd: [UInt32: Double] = [:]
+    /// End of each program's last reported task, per ANE.
+    private var programEnd: [ProgramKey: Double] = [:]
     private var recentDur: [UInt64: [Double]] = [:]
     private var intervals: [UInt32: [TaskInterval]] = [:]
     private var programOf: [UInt32: [(end: Double, handle: UInt64, dur: Double, count: Int)]] = [:]
     private var readErrors = 0
     private var eventsRead = 0
     private var restarts = 0
+    private var maxLateNs = 0.0
+    private var lateTasks = 0
+    private var lateBusyNs = 0.0
+    /// End of the last accounted window; tasks ending before it are late.
+    private var accountedTo = 0.0
     private var firmwareDevices: Set<UInt32> = []
     private var hostSeen = false
     /// Host-side requests have no ANE cpu; they are tracked as one device.
@@ -107,6 +119,11 @@ final class ANETrace {
     /// whose events are unknown.
     private let forceHost = ProcessInfo.processInfo.environment["ANEMON_FORCE_HOST"] == "1"
     private let ignoreEvents = ProcessInfo.processInfo.environment["ANEMON_IGNORE_EVENTS"] == "1"
+    /// ANEMON_DUMP=FILE writes every record as read, for offline replay.
+    private let dump: FileHandle? = ProcessInfo.processInfo.environment["ANEMON_DUMP"].flatMap {
+        FileManager.default.createFile(atPath: $0, contents: nil)
+        return FileHandle(forWritingAtPath: $0)
+    }
     /// Delay between drains of the kdebug buffer.
     private let readPeriodUs: UInt32 = {
         if let v = ProcessInfo.processInfo.environment["ANEMON_READ_MS"], let ms = UInt32(v) { return ms * 1000 }
@@ -166,9 +183,13 @@ final class ANETrace {
                     break
                 }
                 if n == 0 { break }
+                let now = anemon_mach_to_ns(anemon_mach_now())
                 lock.lock()
                 eventsRead += Int(n)
-                for i in 0..<Int(n) { handle(buf[i]) }
+                for i in 0..<Int(n) {
+                    maxLateNs = max(maxLateNs, now - anemon_mach_to_ns(buf[i].timestamp))
+                    handle(buf[i])
+                }
                 lock.unlock()
             }
             var nolog: Int32 = 0
@@ -182,6 +203,11 @@ final class ANETrace {
 
     private func handle(_ e: anemon_kd_buf) {
         if ignoreEvents { return }
+        if let dump {
+            let line = String(format: "%llu %08x %u %llx %llx %llx %llx\n", e.timestamp, e.debugid, e.cpuid,
+                              e.arg1, e.arg2, e.arg3, e.arg4)
+            dump.write(Data(line.utf8))
+        }
         switch e.debugid {
         case ANEEvent.taskStart, ANEEvent.taskEnd:
             guard !forceHost else { return }
@@ -204,16 +230,27 @@ final class ANETrace {
             pendingStart[key] = (ts, handle, cpu)
             return
         }
-        // Tasks of this program the firmware did not report since the last one.
+        // The kernel drops some coprocessor events (a TRACE_PAST_EVENTS
+        // record marks each drop; ~5% of ANE events on M6), so a task can
+        // lack its start, its end or both. Every case is charged the
+        // program's typical duration, and busy time is the union of the
+        // intervals when a window is accounted, so overlapping estimates are
+        // not counted twice.
+        let prevTxn = lastTxn[program]
         var missing = 0
-        if let last = lastTxn[program], txn > last + 1, txn - last < 1_000_000 {
+        if let last = prevTxn, txn > last + 1, txn - last < 1_000_000 {
             missing = Int(txn - last - 1)
         }
-        if txn > lastTxn[program] ?? 0 { lastTxn[program] = txn }
-        // A program's tasks finish in order: earlier starts whose end was not
-        // reported are over, not still running.
-        let stale = pendingStart.keys.filter { $0.program == program && $0.txn < txn }
-        for k in stale { pendingStart.removeValue(forKey: k) }
+        if txn > prevTxn ?? 0 { lastTxn[program] = txn }
+        // A program's tasks finish in order: earlier starts whose end was
+        // lost are over. They ran from their start for about the typical time.
+        let typical = typicalDuration(handle)
+        for k in pendingStart.keys where k.program == program && k.txn < txn {
+            guard let s = pendingStart.removeValue(forKey: k) else { continue }
+            let end = min(s.ts + typical, ts)
+            append(cpu, TaskInterval(start: s.ts, end: end, estimated: true), handle: handle)
+            if let last = prevTxn, k.txn > last, missing > 0 { missing -= 1 }
+        }
 
         var start: Double
         var estimated = false
@@ -224,23 +261,55 @@ final class ANETrace {
             if d.count > 64 { d.removeFirst(d.count - 64) }
             recentDur[handle] = d
         } else {
-            start = ts - typicalDuration(handle)
+            start = ts - typical
             estimated = true
         }
-        // One ANE executes one task at a time: never overlap the previous task.
-        let prevEnd = lastEnd[cpu]
-        if let prev = prevEnd, start < prev { start = min(prev, ts) }
         if missing > 0 {
-            // Charge unreported tasks their typical duration, but never more
-            // than the idle gap they must have run in.
-            let room = max(0, start - (prevEnd ?? start))
-            let fill = min(Double(missing) * typicalDuration(handle, fallback: ts - start), room)
-            intervals[cpu, default: []].append(TaskInterval(start: start - fill, end: start, estimated: true, count: missing))
-            programOf[cpu, default: []].append((start, handle, fill, missing))
+            // Tasks with neither event ran while this ANE had no other work,
+            // after the program's previous task: fill the idle gaps there,
+            // latest first, up to their typical duration.
+            fillIdle(cpu, handle: handle, from: programEnd[program] ?? start, to: start,
+                     need: Double(missing) * typicalDuration(handle, fallback: ts - start), count: missing)
         }
-        lastEnd[cpu] = ts
-        intervals[cpu, default: []].append(TaskInterval(start: start, end: ts, estimated: estimated))
-        programOf[cpu, default: []].append((ts, handle, ts - start, 1))
+        lastEnd[cpu] = max(lastEnd[cpu] ?? ts, ts)
+        programEnd[program] = ts
+        if ts < accountedTo {
+            lateTasks += 1
+            lateBusyNs += min(ts, accountedTo) - start
+        }
+        append(cpu, TaskInterval(start: start, end: ts, estimated: estimated), handle: handle)
+    }
+
+    private func append(_ cpu: UInt32, _ iv: TaskInterval, handle: UInt64) {
+        intervals[cpu, default: []].append(iv)
+        programOf[cpu, default: []].append((iv.end, handle, iv.end - iv.start, iv.count))
+    }
+
+    private func fillIdle(_ cpu: UInt32, handle: UInt64, from: Double, to: Double, need: Double, count: Int) {
+        guard to > from, need > 0 else {
+            append(cpu, TaskInterval(start: to, end: to, estimated: true, count: count), handle: handle)
+            return
+        }
+        var busy = (intervals[cpu] ?? []).filter { $0.end > from && $0.start < to }.map { ($0.start, $0.end) }
+        busy.sort { $0.0 < $1.0 }
+        var gaps: [(Double, Double)] = []
+        var cur = from
+        for (a, b) in busy {
+            if a > cur { gaps.append((cur, a)) }
+            cur = max(cur, b)
+        }
+        if to > cur { gaps.append((cur, to)) }
+        var left = need
+        var first = true
+        for (a, b) in gaps.reversed() where left > 0 {
+            let take = min(left, b - a)
+            // The task count goes with the first piece only.
+            append(cpu, TaskInterval(start: b - take, end: b, estimated: true, count: first ? count : 0), handle: handle)
+            first = false
+            left -= take
+        }
+        // No idle time left: still count the tasks.
+        if first { append(cpu, TaskInterval(start: to, end: to, estimated: true, count: count), handle: handle) }
     }
 
     private func typicalDuration(_ handle: UInt64, fallback: Double = 0) -> Double {
@@ -259,8 +328,9 @@ final class ANETrace {
         let cpus = source == .firmware ? firmwareDevices.sorted() : source == .host ? [Self.hostDevice] : []
         for cpu in cpus {
             var w = DeviceWindow(cpuid: cpu)
+            var spans: [(Double, Double)] = []
             for iv in intervals[cpu] ?? [] where iv.end >= from && iv.start <= to {
-                w.busyNs += min(iv.end, to) - max(iv.start, from)
+                spans.append((max(iv.start, from), min(iv.end, to)))
                 if iv.end <= to {
                     w.tasks += iv.count
                     w.taskNsSum += iv.end - iv.start
@@ -268,14 +338,25 @@ final class ANETrace {
                 }
             }
             // A task that started but has not ended yet is busy until `to`.
-            let busyUntil = w.busyNs
-            var inflight = 0.0
-            for (_, s) in pendingStart where s.cpu == cpu && s.ts < to {
+            // Starts older than the last end on this ANE are over; starts
+            // whose end we never saw are dropped after 10 s.
+            for (_, s) in pendingStart where s.cpu == cpu && s.ts < to && to - s.ts < 10e9 {
                 let begin = max(s.ts, lastEnd[cpu] ?? 0, from)
-                // Starts whose end we never saw are dropped after 10 s.
-                if to - s.ts < 10e9 { inflight = max(inflight, to - begin) }
+                if begin < to { spans.append((begin, to)) }
             }
-            w.busyNs = min(busyUntil + inflight, to - from)
+            // One ANE runs one task at a time: busy time is the union.
+            spans.sort { $0.0 < $1.0 }
+            var curStart = -Double.infinity, curEnd = -Double.infinity
+            for (a, b) in spans {
+                if a > curEnd {
+                    if curEnd > curStart { w.busyNs += curEnd - curStart }
+                    curStart = a; curEnd = b
+                } else {
+                    curEnd = max(curEnd, b)
+                }
+            }
+            if curEnd > curStart { w.busyNs += curEnd - curStart }
+            w.busyNs = min(w.busyNs, to - from)
             for p in programOf[cpu] ?? [] where p.end >= from && p.end <= to {
                 programs[p.handle, default: ProgramStats(handle: p.handle)].tasks += p.count
                 programs[p.handle]!.busyNs += min(p.dur, p.end - from)
@@ -287,10 +368,11 @@ final class ANETrace {
             programOf[cpu]?.removeAll { $0.end < from }
         }
         pendingStart = pendingStart.filter { to - $0.value.ts < 10e9 }
-        defer { readErrors = 0; eventsRead = 0; restarts = 0 }
+        defer { readErrors = 0; eventsRead = 0; restarts = 0; maxLateNs = 0; lateTasks = 0; lateBusyNs = 0 }
+        accountedTo = max(accountedTo, to)
         return TraceWindow(startNs: from, endNs: to, devices: devices,
                            programs: programs.values.sorted { $0.busyNs > $1.busyNs },
                            droppedReads: readErrors, eventsRead: eventsRead, restarts: restarts,
-                           source: source)
+                           source: source, maxLateNs: maxLateNs, lateTasks: lateTasks, lateBusyNs: lateBusyNs)
     }
 }

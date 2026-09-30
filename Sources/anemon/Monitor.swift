@@ -32,6 +32,9 @@ struct Snapshot {
     var traceErrors = 0
     var traceEventsPerS = 0.0
     var traceRestarts = 0
+    var traceMaxLateMs = 0.0
+    var traceLateTasks = 0
+    var traceLateBusyMs = 0.0
 }
 
 /// Per-architecture knowledge for sources that need it.
@@ -144,6 +147,9 @@ final class Monitor {
             s.traceErrors = w.droppedReads
             s.traceEventsPerS = Double(w.eventsRead) / (span / 1e9)
             s.traceRestarts = w.restarts
+            s.traceMaxLateMs = w.maxLateNs / 1e6
+            s.traceLateTasks = w.lateTasks
+            s.traceLateBusyMs = w.lateBusyNs / 1e6
         }
         s.powerW = power?.watts
         if s.powerW != nil { s.powerSource = "powermetrics" }

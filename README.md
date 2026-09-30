@@ -54,10 +54,9 @@ that update (build 26A434) a 3-second capture of every event in the ANE
 subclass under full load contains no `0x061b0125`/`0x061b0126` and nothing
 stamped on the ANE's own trace CPU, whatever submits the work (anebench,
 Core ML, `powermetrics -s ane_power` beforehand). The driver's
-submit/complete events are still there, so anemon reports `ane_busy_source`
-`host`: a task's time then includes its wait in the driver queue, and no
-per-engine split is possible. The M6 on the same build still logs firmware
-events.
+submit/complete events are still there, and anemon falls back to them (see
+[Driver events](#driver-events)). The M6 on the same build still logs
+firmware events.
 
 On other chips busy % works if the firmware uses the same event codes; run
 `sudo anemon calibrate` to check. DRAM and power need chip-specific
@@ -74,20 +73,55 @@ The ANE firmware logs two kdebug events per task in class 0x06, subclass
 (`0x061b0126`). Both carry the program handle in arg1 and a per-program
 transaction id in arg3.
 
-- A task's interval is its start-to-end span. Many short tasks have no start
-  event; they are charged the median duration of the program's recent paired
-  tasks.
-- Gaps in a program's transaction ids are tasks that were not reported at
-  all. They are charged the same median, bounded by the idle time around them.
-- A task that has started but not yet ended counts as busy up to the end of
-  the interval, so long inferences do not read as idle.
-- The window lags real time by 250 ms because events reach the reader late.
-- If the firmware events are missing, anemon falls back to the driver's
-  submit/complete events (`0x061b00a0`), which include queueing time.
+Not every task arrives with both events. The firmware omits the start of
+many very short tasks, and the kernel drops some coprocessor events outright:
+an ANE event whose timestamp is older than what that engine's buffer already
+holds is discarded and replaced by a `0x07020018` record. On M6 this loses
+about 5% of the task events, although `ktrace` on the same kernel receives
+all of them. anemon therefore charges each incomplete task the median
+duration of the program's recent complete tasks:
+
+- start only: from the start, for that duration
+- end only: that duration before the end
+- neither (a gap in the program's transaction ids): into the engine's idle
+  time since the program's previous task, latest first
+
+Busy time is the union of these intervals on each engine, so overlapping
+estimates are not counted twice. A task that has started but not ended counts
+as busy up to the end of the interval, so long inferences do not read as
+idle. The window lags real time by 250 ms because events reach the reader late.
+
+When no firmware events arrive, anemon falls back to the driver's
+submit/complete events (`0x061b00a0`); see [Driver events](#driver-events).
 
 `KERN_KDREADTR` returns at most about 3,900 records per call, so the reader
 drains the kernel buffer in a loop. Tracing runs in ring-buffer mode and is
 re-enabled if the kernel stops it.
+
+### Driver events
+
+The driver logs `0x061b00a0` when it submits a request (arg1 = 0) and when
+the firmware reports it complete (arg1 = 1), with the program handle in arg2
+and the transaction id in arg4. A span from submit to completion includes the
+time the request waited in the driver, but since one engine runs one task at
+a time, the union of the spans is still the time the ANE had work. The M6
+logs both kinds of events, so the same workloads were measured each way
+(`ANEMON_FORCE_HOST=1` ignores the firmware events):
+
+| Workload | Firmware events | Driver events |
+|---|---:|---:|
+| 10 ms evaluations, continuous | 96.7% | 97.6% |
+| 10 ms evaluations, 50% duty | 47.1% | 47.7% |
+| 3.9 ms evaluations, continuous | 92.9% | 94.2% |
+| 0.24 ms evaluations, continuous | 45.6% | 45.4% |
+| µs evaluations, 50% duty | 0.1% | 0.0% |
+| two processes, 3.9 ms each | 99.9% | 100.0% |
+
+Busy % from driver events is within about 1.5 points of the firmware figure.
+Task counts are not: the M6 driver logs one request per engine for each
+evaluation, so tasks/s is twice the evaluation rate. Driver events also
+cannot split busy time between engines, and they mark `ane_busy_source` as
+`host`.
 
 ### DRAM traffic
 
@@ -204,6 +238,10 @@ lockstep and report the same busy %. Busy check with three stacked layers
 48.3% at 50% duty. With a single layer (3.9 ms per evaluation) anemon read
 93%, which matches 250 tasks/s × 3.72 ms; the rest of the host's 100% was
 the overhead between evaluations.
+
+Two anebench processes sharing the ANE: 99.9% busy with firmware events,
+matching the union of the start-to-end spans in a `ktrace` capture (100%).
+Before anemon estimated tasks with lost events, this read 82%.
 
 DRAM against the weight traffic of an FP16 GEMV, which reads its weights once
 per evaluation:

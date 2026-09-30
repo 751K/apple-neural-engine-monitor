@@ -93,6 +93,9 @@ func jsonLine(_ s: Snapshot) -> String {
     if debug {
         d["debug_rail_w"] = s.railW ?? NSNull()
         d["debug_pcluster_w"] = s.pclusterW ?? NSNull()
+        d["debug_trace_max_late_ms"] = s.traceMaxLateMs
+        d["debug_trace_late_tasks"] = s.traceLateTasks
+        d["debug_trace_late_busy_ms"] = s.traceLateBusyMs
     }
     d["ane_interrupts_per_s"] = s.interruptsPerS ?? NSNull()
     let data = try! JSONSerialization.data(withJSONObject: d, options: [.sortedKeys])
