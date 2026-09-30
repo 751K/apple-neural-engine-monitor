@@ -53,17 +53,19 @@ static int is_ane_dcs(const char *s) {
     return strncasecmp(s, " DCS ", 5) == 0;
 }
 
-// PMP DCS BW link histogram: "ANE<n> L<n> RD" or "... WR" (not "RD+WR").
+// PMP DCS BW link histogram: "ANE<n> L<n> RD" (M6, two links per engine),
+// "ANE<n> RD" (M4, one link) or the same with WR (not "RD+WR").
 // Returns 1 for read, 2 for write, 0 otherwise.
 static int ane_link_dir(const char *s) {
     if (strncmp(s, "ANE", 3) != 0) return 0;
     s += 3;
     if (*s < '0' || *s > '9') return 0;
     while (*s >= '0' && *s <= '9') s++;
-    if (strncmp(s, " L", 2) != 0) return 0;
-    s += 2;
-    if (*s < '0' || *s > '9') return 0;
-    while (*s >= '0' && *s <= '9') s++;
+    if (strncmp(s, " L", 2) == 0) {
+        s += 2;
+        if (*s < '0' || *s > '9') return 0;
+        while (*s >= '0' && *s <= '9') s++;
+    }
     if (strcmp(s, " RD") == 0) return 1;
     if (strcmp(s, " WR") == 0) return 2;
     return 0;
@@ -149,8 +151,11 @@ anemon_ior *anemon_ior_open(void) {
         return NULL;
     }
 
+    // ANEMON_NO_AMC=1 skips the AMC byte counters, to test the histogram
+    // fallback on a machine that has them.
+    int no_amc = getenv("ANEMON_NO_AMC") != NULL;
     CFMutableDictionaryRef parts[] = {
-        usable(r, CFSTR("AMC Stats"), CFSTR("Perf Counters"), keep_ane_dcs),
+        no_amc ? NULL : usable(r, CFSTR("AMC Stats"), CFSTR("Perf Counters"), keep_ane_dcs),
         usable(r, CFSTR("PMP"), CFSTR("DCS BW"), keep_ane_link),
         usable(r, CFSTR("PMP"), CFSTR("Energy"), keep_pcluster),
         usable(r, CFSTR("Interrupt Statistics (by index)"), NULL, NULL),

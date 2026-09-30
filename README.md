@@ -46,7 +46,7 @@ undocumented macOS interfaces and may change between releases.
 | | M4 (h16g) | M6 (h18g), macOS 27.0.1 |
 |---|---|---|
 | busy %, tasks, programs | kdebug firmware task events, validated; driver events after the Mac has slept (see below) | firmware task events, busy check passed |
-| DRAM | IOReport byte counters, exact | IOReport per-link bandwidth histograms, a lower bound at full speed |
+| DRAM | IOReport byte counters, exact (checked with SIP off); histogram fallback, about half the real value at full speed | IOReport per-link bandwidth histograms, a lower bound at full speed |
 | power | `powermetrics` | SMC rail minus P-core power, an estimate |
 
 **After the Mac has slept, firmware task events are lost until the next
@@ -131,11 +131,20 @@ cannot split busy time between engines, and they mark `ane_busy_source` as
 ### DRAM traffic
 
 **M4:** the IOReport channels `AMC Stats / Perf Counters / ANE DCS RD` and
-`ANE DCS WR` count bytes at the DRAM controllers.
+`ANE DCS WR` count bytes at the DRAM controllers. This has only been checked
+with System Integrity Protection disabled; on the M6 (SIP enabled) the kernel
+refuses the same subscription. If it fails on an M4, anemon falls back to the
+`PMP / DCS BW` histogram of its single ANE link (`ANE0 RD` / `ANE0 WR`),
+sampled about 4408 times per second while the link is on. That link's
+histogram also stops at 32 GB/s, about half of what the M4 ANE can read, so
+under heavy load the fallback reports roughly half the real traffic and flags
+it as clipped. With a streaming FP16 GEMV the byte counters read 65.5 GB/s
+and the fallback 32 GB/s (98% of samples in the top bin); at 50% duty,
+31.7 GB/s against 16 GB/s. `ANEMON_NO_AMC=1` forces the fallback for testing.
 
 **M6:** the same channels exist as `ANE0/ANE1 DCS RD/WR`, but the kernel
-refuses to subscribe to them, even for root. anemon reads `PMP / DCS BW`
-instead. It has a histogram for each of the four ANE memory links (`ANE0 L0`,
+refuses to subscribe to them, even for root; whether that is because SIP is
+enabled there has not been tested. anemon reads `PMP / DCS BW` instead. It has a histogram for each of the four ANE memory links (`ANE0 L0`,
 `ANE0 L1`, `ANE1 L0`, `ANE1 L1`, read and write) with 1 GB/s bins up to
 32 GB/s. A link is sampled 24 MHz / 5400 = 4444 times per second while it is
 on. anemon sums bin midpoint × sample count over the links and divides by
