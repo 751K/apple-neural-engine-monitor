@@ -58,8 +58,10 @@ tested). The kernel drops all of them as stale, so no firmware events reach
 anemon or `ktrace`. The driver's submit/complete events are unaffected, and
 anemon falls back to them (see [Driver events](#driver-events)); the TUI
 names the cause and JSON reports `slept_since_boot_s`. The M6 tested had not
-slept since boot and received firmware events normally. A reboot should
-restore the events until the next sleep; that has not been verified yet.
+slept since boot and received firmware events normally, and after a reboot
+the M4 did too (98.7% busy from firmware events on the same workload) until
+it sleeps again. To keep firmware events on a benchmark machine, disable
+system sleep.
 
 On other chips busy % works if the firmware uses the same event codes; run
 `sudo anemon calibrate` to check. DRAM and power need chip-specific
