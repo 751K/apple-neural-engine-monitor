@@ -68,8 +68,11 @@ Power is anemon's SMC estimate; under random INT8 load it matched the rise of
 `PP0b` within 0.2 W, with P-cluster power unchanged, and `PDTR` (whole
 machine) rose from 1.2 W to 23–26 W. Over 30 s at full load the reading fell
 from 16.0 W to 14.0 W. On the M4, zero and random inputs give the same
-throughput (36.5 against 36.7 TOPS, 18.8 against 18.8 TOPS); the M4 power
-figures below were measured with zero inputs.
+throughput (36.5 against 36.7 TOPS, 18.8 against 18.8 TOPS), but not the
+same power: `powermetrics` read 4.14 W for eight chained 5×5 INT8 convs (1024
+ch, 38.3 TOPS) with zero inputs and 12.93 W with random inputs, and the
+whole machine (SMC `PSTR`) rose by 4.1 W and 17.7 W. The M4 power table
+below was measured with zero inputs.
 
 Earlier runs used a single layer, which takes only 3.9 ms per evaluation on
 the M6. anemon then read 92.9–95.3% against the host's 100%, and one run

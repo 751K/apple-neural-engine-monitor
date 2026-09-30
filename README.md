@@ -96,7 +96,9 @@ busy % against the share of wall time spent in the ANE on the host:
 
 - Two processes sharing the ANE: 100% busy, no task events lost, each attributed to its own PID.
 - Peak INT8 throughput 35–38 TOPS across runs (theoretical 38.4).
-- Power 0.66 W with tiny tasks, 2.1–2.6 W for FP16 convolutions, 3.4–4.1 W for INT8.
+- Power at full INT8 load (38 TOPS) with random inputs: 12.9 W. Measured with
+  all-zero inputs: 0.66 W with tiny tasks, 2.1–2.6 W for FP16 convolutions,
+  3.4–4.1 W for INT8; the full INT8 load reads 4.1 W with zero inputs.
 - Read bandwidth 66 GB/s, matching the weight traffic of the test GEMV.
 - A MacBook Air M4 with SIP enabled gave the same results.
 
