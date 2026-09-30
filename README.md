@@ -43,11 +43,21 @@ A metric that is unavailable on a chip is reported as null, never as 0.
 Where each metric comes from depends on the chip. All of these are private or
 undocumented macOS interfaces and may change between releases.
 
-| | M4 (h16g), macOS 27 | M6 (h18g), macOS 27.0.1 |
+| | M4 (h16g) | M6 (h18g), macOS 27.0.1 |
 |---|---|---|
-| busy %, tasks, programs | kdebug firmware task events, validated | same, busy check passed |
+| busy %, tasks, programs | macOS 27.0: kdebug firmware task events, validated. macOS 27.0.1: driver events only (see below), busy check passed | firmware task events, busy check passed |
 | DRAM | IOReport byte counters, exact | IOReport per-link bandwidth histograms, a lower bound at full speed |
 | power | `powermetrics` | SMC rail minus P-core power, an estimate |
+
+**The M4 firmware stopped logging task events with macOS 27.0.1.** Since
+that update (build 26A434) a 3-second capture of every event in the ANE
+subclass under full load contains no `0x061b0125`/`0x061b0126` and nothing
+stamped on the ANE's own trace CPU, whatever submits the work (anebench,
+Core ML, `powermetrics -s ane_power` beforehand). The driver's
+submit/complete events are still there, so anemon reports `ane_busy_source`
+`host`: a task's time then includes its wait in the driver queue, and no
+per-engine split is possible. The M6 on the same build still logs firmware
+events.
 
 On other chips busy % works if the firmware uses the same event codes; run
 `sudo anemon calibrate` to check. DRAM and power need chip-specific
@@ -157,9 +167,9 @@ measurement the machine does not expose is left out of the profile.
 
 ## Validation
 
-### M4 (h16g, macOS 27)
+### M4 (h16g)
 
-Busy % against the share of wall time a workload spent inside synchronous
+On macOS 27.0 (build 26A428), with firmware task events, busy % against the share of wall time a workload spent inside synchronous
 `Eval` calls on the host:
 
 | Workload | Host | anemon |
@@ -180,6 +190,11 @@ consecutive transaction ids, so the extra tasks are real work.
 Power from `powermetrics`: 0.66 W with tiny tasks, 2.1–2.6 W for FP16
 convolutions, 3.4 W for INT8 at 31 TOPS. Peak INT8 throughput: 38.2 TOPS
 against a theoretical 38.4.
+
+On macOS 27.0.1 (build 26A434), with driver events only, calibration passed
+the busy check with 10.7 ms evaluations: host 100.0% vs anemon 98.9% at full
+duty, 50.8% vs 51.1% at 50% duty. It measured 35.4 INT8 TOPS, 3.87 W peak
+power and 66.0 GB/s read bandwidth.
 
 ### M6 (h18g, 32 cores, macOS 27.0.1)
 
