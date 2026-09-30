@@ -4,6 +4,11 @@
 #include "canemon.h"
 
 #include <errno.h>
+#include <libproc.h>
+
+#ifndef PROC_PIDLISTTHREADIDS
+#define PROC_PIDLISTTHREADIDS 28   // private in xnu bsd/sys/proc_info.h
+#endif
 #include <mach/mach_time.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,8 +24,14 @@ typedef struct {
     int bufid;
 } kbufinfo_t;
 
-#define KDBG_TYPEFILTER_BYTES (256 * 256 / 8)
 #define KDBG_NOWRAP 0x02
+#define KDBG_VALCHECK 0x00200000U
+#define KDBG_SUBCLSTYPE 0x20000
+
+typedef struct {
+    unsigned int type;
+    unsigned int value1, value2, value3, value4;
+} kd_regtype;
 
 static int started;
 
@@ -34,7 +45,7 @@ static int kd_ctl3(int op, void *buf, size_t *len) {
     return sysctl(mib, 3, buf, len, NULL, 0);
 }
 
-int anemon_kd_start(const uint16_t *csc, int ncsc, int nbufs, int *busy_pid) {
+int anemon_kd_start(const uint32_t *ids, int nids, int nbufs, int *busy_pid) {
     if (busy_pid) *busy_pid = -1;
     if (geteuid() != 0) return ANEMON_KD_NOT_ROOT;
 
@@ -57,13 +68,22 @@ int anemon_kd_start(const uint16_t *csc, int ncsc, int nbufs, int *busy_pid) {
     zero = 0;
     kd_ctl(KERN_KDDFLAGS, KDBG_NOWRAP, NULL, &zero);
 
-    uint8_t *filter = calloc(1, KDBG_TYPEFILTER_BYTES);
-    if (!filter) goto fail;
-    for (int i = 0; i < ncsc; i++) filter[csc[i] / 8] |= (uint8_t)(1u << (csc[i] % 8));
-    size_t flen = KDBG_TYPEFILTER_BYTES;
-    int rc = kd_ctl3(KERN_KDSET_TYPEFILTER, filter, &flen);
-    free(filter);
-    if (rc != 0) goto fail;
+    // Record only the given event ids. A class/subclass typefilter would also
+    // pass the ANE driver's other events (~90k/s on M6), and every read then
+    // advances the kernel's oldest-valid time past firmware events that are
+    // still on their way from the coprocessor, which the kernel drops as
+    // "past events" (xnu bsd/kern/kdebug.c). With exact ids the M6 lost ~0.2%
+    // of its firmware task events instead of ~10%.
+    if (nids < 1 || nids > 4) { errno = EINVAL; goto fail; }
+    kd_regtype r = {KDBG_VALCHECK, 0, 0, 0, 0};
+    unsigned int *v[4] = {&r.value1, &r.value2, &r.value3, &r.value4};
+    for (int i = 0; i < 4; i++) *v[i] = ids[i < nids ? i : 0];
+    // Research aid: ANEMON_KD_ALL=1 records the first id's whole
+    // class/subclass instead (and accepts the losses above).
+    const char *all = getenv("ANEMON_KD_ALL");
+    if (all && *all == '1') r = (kd_regtype){KDBG_SUBCLSTYPE, ids[0] >> 24, (ids[0] >> 16) & 0xff, 0, 0};
+    size_t rlen = sizeof(r);
+    if (kd_ctl3(KERN_KDSETREG, &r, &rlen) != 0) goto fail;
 
     zero = 0;
     if (kd_ctl(KERN_KDENABLE, 1, NULL, &zero) != 0) goto fail;
@@ -119,4 +139,36 @@ uint64_t anemon_mach_now(void) { return mach_absolute_time(); }
 double anemon_slept_ns(void) {
     uint64_t a = mach_absolute_time(), c = mach_continuous_time();
     return c > a ? anemon_mach_to_ns(c - a) : 0;
+}
+
+int anemon_thread_owner(uint64_t tid, char *name, int namelen) {
+    int n = proc_listallpids(NULL, 0);
+    if (n <= 0) return -1;
+    pid_t *pids = calloc((size_t)n + 64, sizeof(pid_t));
+    if (!pids) return -1;
+    n = proc_listallpids(pids, (int)((n + 64) * sizeof(pid_t)));
+    uint64_t *tids = NULL;
+    int cap = 0, found = -1;
+    for (int i = 0; i < n && found < 0; i++) {
+        struct proc_taskinfo ti;
+        if (proc_pidinfo(pids[i], PROC_PIDTASKINFO, 0, &ti, sizeof(ti)) != sizeof(ti)) continue;
+        int want = ti.pti_threadnum + 16;
+        if (want > cap) {
+            uint64_t *t = realloc(tids, (size_t)want * sizeof(uint64_t));
+            if (!t) break;
+            tids = t;
+            cap = want;
+        }
+        int bytes = proc_pidinfo(pids[i], PROC_PIDLISTTHREADIDS, 0, tids, cap * (int)sizeof(uint64_t));
+        for (int j = 0; j < bytes / (int)sizeof(uint64_t); j++) {
+            if (tids[j] == tid) { found = pids[i]; break; }
+        }
+    }
+    free(tids);
+    free(pids);
+    if (found >= 0 && name && namelen > 0) {
+        name[0] = 0;
+        proc_name(found, name, (uint32_t)namelen);
+    }
+    return found;
 }

@@ -27,10 +27,11 @@ enum {
     ANEMON_KD_FAILED = 3,
 };
 
-// Starts kernel tracing restricted to the given class/subclass pairs
-// (each encoded as (class << 8) | subclass). Returns an ANEMON_KD_* code.
-// *busy_pid is set to the owner when ANEMON_KD_BUSY is returned.
-int anemon_kd_start(const uint16_t *csc, int ncsc, int nbufs, int *busy_pid);
+// Starts kernel tracing restricted to 1-4 event ids (the function qualifier
+// bits are ignored, so 0x061b0124 covers both 0x061b0125 and 0x061b0126).
+// Returns an ANEMON_KD_* code. *busy_pid is set to the owner when
+// ANEMON_KD_BUSY is returned.
+int anemon_kd_start(const uint32_t *ids, int nids, int nbufs, int *busy_pid);
 
 // Drains up to cap records into out. Returns the count, or -1 on error.
 int anemon_kd_read(anemon_kd_buf *out, int cap);
@@ -51,6 +52,11 @@ uint64_t anemon_mach_now(void);
 // Continuous time minus absolute time, in ns: how long the Mac has slept
 // since boot.
 double anemon_slept_ns(void);
+
+// Finds the process that owns a thread (the 64-bit thread id in kd_buf
+// arg5). Returns its pid and copies its name into name, or returns -1.
+// Scans every process, so callers should cache the result.
+int anemon_thread_owner(uint64_t tid, char *name, int namelen);
 
 // ---- IOReport -----------------------------------------------------------
 

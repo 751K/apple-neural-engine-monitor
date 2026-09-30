@@ -24,7 +24,7 @@ the ANE. Calibration uses `anebench` for its test workloads.
 |---|---|---|
 | busy % | Share of wall time the ANE was executing a task | yes |
 | tasks/s, ms/task | Completed ANE tasks and their mean duration | yes |
-| programs | Busy time and task rate per compiled model (program handle) | yes |
+| programs | Busy time and task rate per compiled model (program handle), with the process that submits it | yes |
 | power | ANE power estimate | M4: yes. M6: no |
 | DRAM read/write | ANE traffic to memory | no |
 | interrupts | ANE interrupt rate | no |
@@ -78,12 +78,19 @@ The ANE firmware logs two kdebug events per task in class 0x06, subclass
 (`0x061b0126`). Both carry the program handle in arg1 and a per-program
 transaction id in arg3.
 
-Not every task arrives with both events. The firmware omits the start of
-many very short tasks, and the kernel drops some coprocessor events outright:
-an ANE event whose timestamp is older than what that engine's buffer already
-holds is discarded and replaced by a `0x07020018` record. On M6 this loses
-about 5% of the task events, although `ktrace` on the same kernel receives
-all of them. anemon therefore charges each incomplete task the median
+The kernel drops coprocessor events that arrive stamped earlier than its
+oldest valid time and leaves a `0x07020018` (past events) record instead
+(`bsd/kern/kdebug.c` in xnu). That time rises to the newest record returned by
+every read. ANE firmware events reach the kernel a fraction of a millisecond
+after the driver's own events for the same task, so when the reader keeps
+picking up other ANE driver events, some firmware events arrive already "in
+the past". Tracing the whole ANE subclass (about 90,000 driver events per
+second on M6) lost about 10% of the firmware events this way. anemon therefore
+records only the three event ids it uses (`KDBG_VALCHECK`, at most four ids);
+the M6 then lost about 0.1%.
+
+Some tasks still arrive without both events, and the firmware omits the start
+of many very short tasks. anemon charges each incomplete task the median
 duration of the program's recent complete tasks:
 
 - start only: from the start, for that duration
@@ -98,6 +105,17 @@ idle. The window lags real time by 250 ms because events reach the reader late.
 
 When no firmware events arrive, anemon falls back to the driver's
 submit/complete events (`0x061b00a0`); see [Driver events](#driver-events).
+
+### Processes
+
+Neither the firmware events nor the driver's submit/complete events identify
+the process. The driver emits them from its own work loop thread. Event
+`0x061b0071` (the start of code 0x1c) does. The driver logs it on the calling
+thread each time a process submits a request, with the program handle in arg1.
+The first time anemon sees a handle, it takes the thread id from that record
+and finds the owning process by listing every process's threads
+(`proc_pidinfo`). Model names are not available, because no event carries
+one.
 
 `KERN_KDREADTR` returns at most about 3,900 records per call, so the reader
 drains the kernel buffer in a loop. Tracing runs in ring-buffer mode and is
@@ -184,6 +202,7 @@ Each line is one interval. Besides the metrics above:
 |---|---|
 | `ane_busy_source` | `firmware`, `host` (driver events, includes queueing) or `none` |
 | `ane_busy_status` | `measured`, `idle`, `unverified` or `unsupported`. `unsupported` means IOReport shows ANE activity but no task events arrive; `ane_busy_pct` is then null |
+| `programs` | Up to 16 entries: `handle`, `pid`, `process` (null if the submitting thread was not found), `tasks`, `busy_ms` |
 | `ane_power_source` | `powermetrics` or `smc_estimate` |
 | `dram_source` | `amc` (byte counters) or `histogram` |
 | `dram_clipped_pct` | For histograms, the share of read samples in the open-ended top bin |
@@ -251,6 +270,10 @@ anemon 99.3% at full duty and 53.9% vs 54.4% at 50% duty, with two stacked
 layers (18.6 ms per evaluation); 37.2 INT8 TOPS, 4.06 W peak power,
 66.6 GB/s read bandwidth.
 
+Two anebench processes with the exact event filter: 672 starts and 672 ends
+for 672 submits in 6.5 seconds, 100% busy, and each program attributed to its
+own anebench PID.
+
 A MacBook Air M4 with SIP enabled (macOS 27.0.1, 37 hours asleep since boot)
 behaved the same: driver events only, 98.9% busy and 95 tasks/s on a 10.5 ms
 convolution, 3.41 W from `powermetrics`, and DRAM from the AMC byte counters
@@ -267,7 +290,11 @@ the overhead between evaluations.
 
 Two anebench processes sharing the ANE: 99.9% busy with firmware events,
 matching the union of the start-to-end spans in a `ktrace` capture (100%).
-Before anemon estimated tasks with lost events, this read 82%.
+Before anemon estimated tasks with lost events, this read 82%. The two
+programs were attributed to the two anebench PIDs. With the exact event
+filter, a 7-second dump held 2,015/2,013 and 2,014/2,013 starts/ends on the two
+engines for 4,034 submits, and 8 past-event records. Tracing the whole subclass
+gave 1,458/1,315 and 1,397/1,230 in 5.9 seconds, with 604 past-event records.
 
 DRAM against the weight traffic of an FP16 GEMV, which reads its weights once
 per evaluation:
@@ -287,9 +314,12 @@ real model yet.
 
 - kdebug has a single owner. While anemon runs, Instruments, `ktrace` and
   `fs_usage` cannot trace, and anemon cannot start while one of them is tracing.
-- At very high task rates (about 10k/s) the subclass produces over a million
-  records per second, and anemon spends noticeable CPU decoding them.
-- Processes are not identified: task events carry a program handle, not a PID.
+- Programs are identified by handle and process, not by model name.
+- busy % says when the ANE was running, not how much of its compute was used.
+  The driver's performance counters and stats buffers go to the process that
+  submitted the request. The driver's debug client (`ANEDriverDebugClient`)
+  cannot be opened by an unsigned process, even as root: only the load
+  balancer's two regular client types open.
 - busy % is reported per engine. On M6 both engines have so far always run
   the same work in lockstep; separate workloads on the two engines have not
   been tested.

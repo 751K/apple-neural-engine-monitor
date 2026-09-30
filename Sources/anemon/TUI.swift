@@ -144,10 +144,13 @@ final class TUI {
         }
         if !s.programs.isEmpty {
             o += "\n\(esc)1mprograms (ANE time this interval)\(esc)0m\n"
-            o += "  handle              share   tasks/s    ms/task\n"
+            o += "  process (pid)             handle      share   tasks/s    ms/task\n"
             for p in s.programs.prefix(8) {
                 let share = 100 * p.busyNs / (s.intervalS * 1e9)
-                o += String(format: "  0x%-14llx %7.1f%% %9.0f %10.3f\n", p.handle, share,
+                var who = p.process.map { "\($0) (\(p.pid!))" } ?? "?"
+                if who.count > 24 { who = String(who.prefix(23)) + "…" }
+                o += "  " + who.padding(toLength: 24, withPad: " ", startingAt: 0)
+                o += String(format: "  0x%-8llx %7.1f%% %9.0f %10.3f\n", p.handle, share,
                             Double(p.tasks) / s.intervalS, p.busyNs / Double(max(p.tasks, 1)) / 1e6)
             }
         }

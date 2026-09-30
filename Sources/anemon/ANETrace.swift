@@ -23,10 +23,16 @@ import Foundation
 /// chips whose firmware events differ. Its spans include queueing: on M4 they
 /// run a few microseconds longer than the firmware spans.
 enum ANEEvent {
-    static let classSubclass: UInt16 = 0x061b
+    /// Recorded ids: 0x061b0124 matches both task start and end.
+    static let traced: [UInt32] = [0x061b_0124, 0x061b_00a0, 0x061b_0070]
     static let taskStart: UInt32 = 0x061b_0125
     static let taskEnd: UInt32 = 0x061b_0126
     static let hostRequest: UInt32 = 0x061b_00a0
+    /// Emitted on the calling thread when a process submits a request:
+    /// arg1 = program handle, arg3 = transaction id. Its thread id (arg5)
+    /// names the process that owns the program; the other two events come
+    /// from firmware or the driver's work loop.
+    static let submit: UInt32 = 0x061b_0071
 }
 
 /// Which events the busy figures come from.
@@ -57,6 +63,8 @@ private struct TaskKey: Hashable {
 /// Per-program accounting within one reporting window.
 struct ProgramStats {
     var handle: UInt64
+    var pid: Int32?
+    var process: String?
     var tasks = 0
     var busyNs = 0.0
 }
@@ -110,6 +118,10 @@ final class ANETrace {
     private var lateBusyNs = 0.0
     /// End of the last accounted window; tasks ending before it are late.
     private var accountedTo = 0.0
+    /// Process that submitted each program, from the thread of its submit
+    /// events. Threads to look up are queued and resolved outside the lock.
+    private var owners: [UInt64: (tid: UInt64, pid: Int32, name: String)] = [:]
+    private var unresolved: [UInt64: UInt64] = [:]
     private var firmwareDevices: Set<UInt32> = []
     private var hostSeen = false
     /// Host-side requests have no ANE cpu; they are tracked as one device.
@@ -148,9 +160,9 @@ final class ANETrace {
     }
 
     func start() throws {
-        var csc = [ANEEvent.classSubclass]
+        var ids = ANEEvent.traced
         var owner: Int32 = -1
-        let rc = anemon_kd_start(&csc, Int32(csc.count), 1 << 20, &owner)
+        let rc = anemon_kd_start(&ids, Int32(ids.count), 1 << 20, &owner)
         switch Int(rc) {
         case Int(ANEMON_KD_OK): break
         case Int(ANEMON_KD_NOT_ROOT): throw StartError.notRoot
@@ -192,6 +204,7 @@ final class ANETrace {
                 }
                 lock.unlock()
             }
+            resolveOwners()
             var nolog: Int32 = 0
             if anemon_kd_status(&nolog, nil, nil) == 0, nolog != 0, running {
                 anemon_kd_reenable()
@@ -204,8 +217,8 @@ final class ANETrace {
     private func handle(_ e: anemon_kd_buf) {
         if ignoreEvents { return }
         if let dump {
-            let line = String(format: "%llu %08x %u %llx %llx %llx %llx\n", e.timestamp, e.debugid, e.cpuid,
-                              e.arg1, e.arg2, e.arg3, e.arg4)
+            let line = String(format: "%llu %08x %u %llx %llx %llx %llx %llx\n", e.timestamp, e.debugid, e.cpuid,
+                              e.arg1, e.arg2, e.arg3, e.arg4, e.arg5)
             dump.write(Data(line.utf8))
         }
         switch e.debugid {
@@ -218,9 +231,34 @@ final class ANETrace {
             hostSeen = true
             task(ts: anemon_mach_to_ns(e.timestamp), cpu: Self.hostDevice, handle: e.arg2, txn: e.arg4,
                  isStart: e.arg1 == 0)
+        case ANEEvent.submit:
+            if owners[e.arg1]?.tid != e.arg5 { unresolved[e.arg1] = e.arg5 }
         default:
             break
         }
+    }
+
+    private func resolveOwners() {
+        lock.lock()
+        let todo = unresolved
+        unresolved = [:]
+        lock.unlock()
+        guard !todo.isEmpty else { return }
+        var cache: [UInt64: (Int32, String)] = [:]
+        var found: [UInt64: (tid: UInt64, pid: Int32, name: String)] = [:]
+        for (handle, tid) in todo {
+            if cache[tid] == nil {
+                var name = [CChar](repeating: 0, count: 64)
+                let pid = anemon_thread_owner(tid, &name, Int32(name.count))
+                cache[tid] = (pid, String(cString: name))
+            }
+            // A thread that has exited leaves pid -1; keep it so we do not
+            // rescan every process on each of its late events.
+            found[handle] = (tid, cache[tid]!.0, cache[tid]!.1)
+        }
+        lock.lock()
+        owners.merge(found) { $1 }
+        lock.unlock()
     }
 
     private func task(ts: Double, cpu: UInt32, handle: UInt64, txn: UInt64, isStart: Bool) {
@@ -358,7 +396,12 @@ final class ANETrace {
             if curEnd > curStart { w.busyNs += curEnd - curStart }
             w.busyNs = min(w.busyNs, to - from)
             for p in programOf[cpu] ?? [] where p.end >= from && p.end <= to {
-                programs[p.handle, default: ProgramStats(handle: p.handle)].tasks += p.count
+                if programs[p.handle] == nil {
+                    var st = ProgramStats(handle: p.handle)
+                    if let o = owners[p.handle], o.pid >= 0 { st.pid = o.pid; st.process = o.name }
+                    programs[p.handle] = st
+                }
+                programs[p.handle]!.tasks += p.count
                 programs[p.handle]!.busyNs += min(p.dur, p.end - from)
             }
             devices.append(w)

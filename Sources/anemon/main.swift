@@ -79,7 +79,8 @@ func jsonLine(_ s: Snapshot) -> String {
         d["trace_events_per_s"] = s.traceEventsPerS
         d["trace_restarts"] = s.traceRestarts
         d["programs"] = s.programs.prefix(16).map {
-            ["handle": String(format: "0x%llx", $0.handle), "tasks": $0.tasks, "busy_ms": $0.busyNs / 1e6] as [String: Any]
+            ["handle": String(format: "0x%llx", $0.handle), "pid": $0.pid.map { Int($0) } as Any? ?? NSNull(),
+             "process": $0.process ?? NSNull(), "tasks": $0.tasks, "busy_ms": $0.busyNs / 1e6] as [String: Any]
         }
     } else {
         d["ane_busy_pct"] = NSNull()
