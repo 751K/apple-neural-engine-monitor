@@ -43,6 +43,7 @@ struct anemon_ior {
     void *sub;
     CFMutableDictionaryRef subbed;
     CFDictionaryRef prev;
+    int dump_channels;
 };
 
 // "ANE DCS ..." (M4) or "ANE<n> DCS ..." (one per engine).
@@ -152,11 +153,16 @@ anemon_ior *anemon_ior_open(void) {
     }
 
     // ANEMON_NO_AMC=1 skips the AMC byte counters, to test the histogram
-    // fallback on a machine that has them.
+    // fallback on a machine that has them. ANEMON_CHANNELS=1 subscribes every
+    // AMC Stats and PMP DCS BW channel and prints the active ones to stderr,
+    // to find a new chip's channel names; the readings still use only the
+    // known names.
     int no_amc = getenv("ANEMON_NO_AMC") != NULL;
+    r->dump_channels = getenv("ANEMON_CHANNELS") != NULL;
     CFMutableDictionaryRef parts[] = {
-        no_amc ? NULL : usable(r, CFSTR("AMC Stats"), CFSTR("Perf Counters"), keep_ane_dcs),
-        usable(r, CFSTR("PMP"), CFSTR("DCS BW"), keep_ane_link),
+        no_amc ? NULL : r->dump_channels ? usable(r, CFSTR("AMC Stats"), NULL, NULL)
+                                         : usable(r, CFSTR("AMC Stats"), CFSTR("Perf Counters"), keep_ane_dcs),
+        usable(r, CFSTR("PMP"), CFSTR("DCS BW"), r->dump_channels ? NULL : keep_ane_link),
         usable(r, CFSTR("PMP"), CFSTR("Energy"), keep_pcluster),
         usable(r, CFSTR("Interrupt Statistics (by index)"), NULL, NULL),
     };
@@ -190,6 +196,27 @@ static double state_value(anemon_ior *r, CFDictionaryRef ch, int32_t i) {
     return atof(buf);
 }
 
+// ANEMON_CHANNELS: one stderr line per active AMC Stats / PMP DCS BW channel
+// and sample: a counter's delta, or a histogram's non-empty states.
+static void dump_channel(anemon_ior *r, CFDictionaryRef ch, const char *grp, const char *sub, const char *name) {
+    if (strcmp(grp, "AMC Stats") != 0 && !(strcmp(grp, "PMP") == 0 && strcmp(sub, "DCS BW") == 0)) return;
+    if (r->format(ch) == 2) {
+        char line[1024], state[64];
+        int n = snprintf(line, sizeof line, "channel %s / %s / %s:", grp, sub, name), any = 0;
+        for (int32_t j = 0; j < r->state_count(ch) && n < (int)sizeof line - 64; j++) {
+            int64_t res = r->residency(ch, j);
+            if (res <= 0) continue;
+            cfstr(r->state_name(ch, j), state, sizeof state);
+            n += snprintf(line + n, sizeof line - n, " [%s]=%lld", state, (long long)res);
+            any = 1;
+        }
+        if (any) fprintf(stderr, "%s\n", line);
+    } else {
+        int64_t x = r->int_value(ch, 0);
+        if (x > 0) fprintf(stderr, "channel %s / %s / %s: %lld\n", grp, sub, name, (long long)x);
+    }
+}
+
 int anemon_ior_sample(anemon_ior *r, anemon_ior_values *v) {
     memset(v, 0, sizeof *v);
     CFDictionaryRef cur = r->create_samples(r->sub, r->subbed, NULL);
@@ -211,6 +238,7 @@ int anemon_ior_sample(anemon_ior *r, anemon_ior_values *v) {
         cfstr(r->group(ch), grp, sizeof grp);
         cfstr(r->subgroup(ch), sub, sizeof sub);
         cfstr(r->name(ch), name, sizeof name);
+        if (r->dump_channels) dump_channel(r, ch, grp, sub, name);
         // DCS = DRAM controller side; the AF (fabric) counters overlap with it.
         // Chips with two engines report each one; their traffic is summed.
         if (strcmp(grp, "AMC Stats") == 0 && is_ane_dcs(name)) {
