@@ -46,7 +46,11 @@ struct Snapshot {
 struct ChipModel {
     /// PMP "DCS BW" histogram samples per second on one active link:
     /// 24 MHz / 5400 on h18g (measured 4438–4453/s at 100% duty), 4406–4409/s
-    /// measured on h16g. Used only when the AMC byte counters are unavailable.
+    /// measured on h16g, 4745–4786/s on h17 (M5, which has no AMC byte
+    /// counters even as root). Used only when the AMC byte counters are
+    /// unavailable. The ANE0 read histogram on h17 tops out at 32 GB/s, so a
+    /// weight-streaming load (69 GB/s by its weight traffic) reads as a
+    /// clipped lower bound.
     var histSamplesPerS: Double?
     /// SMC power key for the rail that feeds the ANE. On h18g, PP0b also
     /// feeds the P-cores, whose power IOReport reports separately.
@@ -54,6 +58,7 @@ struct ChipModel {
 
     static let known: [String: ChipModel] = [
         "h16g": ChipModel(histSamplesPerS: 4408, aneRail: nil),
+        "h17": ChipModel(histSamplesPerS: 4770, aneRail: nil),
         "h18g": ChipModel(histSamplesPerS: 24e6 / 5400, aneRail: "PP0b"),
     ]
 }
