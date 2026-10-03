@@ -6,17 +6,25 @@ how much power it draws.
 
 ![Anemon on an M6 with two processes using both engines](docs/screenshot-m6.png)
 
-## Quick start
+## Install
 
 ```
 make
-sudo .build/make/anemon calibrate   # once per machine, about 2.5 min (optional on M4 / M6)
-sudo .build/make/anemon             # full-screen view, q to quit
-     .build/make/anemon             # without root: no busy %, tasks or programs
-     .build/make/anemon --json      # one JSON object per interval
+sudo make install       # copies anemon and anebench to /usr/local/bin
 ```
 
-Options: `--interval SECONDS` (default 1), `--count N`, `--no-power`.
+Then run it from any terminal:
+
+```
+sudo anemon             # full-screen view, q to quit
+anemon                  # without root: no busy %, tasks or programs
+anemon --json           # one JSON object per interval
+sudo anemon calibrate   # optional, about 2.5 min; M4 and M6 have built-in values
+```
+
+Options: `--interval SECONDS` (default 1), `--count N`, `--no-power`. After
+pulling a new version, run `make && sudo make install` again. Without
+installing, run `.build/make/anemon` from the repository.
 
 ## What the screen shows
 
