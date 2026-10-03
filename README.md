@@ -23,12 +23,12 @@ Options: `--interval SECONDS` (default 1), `--count N`, `--no-power`.
 | Line | Meaning | Root |
 |---|---|---|
 | `ANE busy` | Share of time each engine was executing a task; tasks/s and mean ms/task | yes |
-| `State` | Each engine running or off; on M6, the countdown to power-off (5.7 s after the last task) | no |
+| `State` | Each engine running or off (JSON also gives the countdown to power-off) | no |
 | `Throttled` | Shown while a throttle trigger is active | no |
 | `Power` | ANE power from the SMC rail PP0b minus the CPU cluster on the same rail (M4, M6) | no |
 | `Host CPU` | Power of the cores that call the ANE; warns when they draw more than the ANE (many small calls) | no |
 | `Memory` | M6: power of the DRAM rails, for all of memory's clients | no |
-| `DRAM` | ANE read/write traffic, interrupts, and the memory clock level | no |
+| `DRAM` | ANE read/write traffic and interrupts (JSON also gives the memory clock level) | no |
 | `programs` | Per process: share of the ANE, tasks/s, ms/task and energy per task (mJ) | yes |
 
 **busy % is time occupancy, not compute utilization**, and not speed either:

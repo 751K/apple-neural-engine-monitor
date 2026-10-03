@@ -65,7 +65,7 @@ final class TUI {
 
     func render(_ s: Snapshot, monitor: Monitor) {
         let device = monitor.device
-        let (maxW, maxMeasured) = monitor.powerScaleW
+        let maxW = monitor.powerScaleW.watts
         let w = min(width, 100)
         let barW = max(10, w - 44)
         if history.count < s.busyPct.count { history += Array(repeating: [], count: s.busyPct.count - history.count) }
@@ -92,89 +92,46 @@ final class TUI {
             o += "\(esc)33mANE busy   not available: IOReport shows ANE activity, but no ANE task events arrive\n"
             o += "           on this chip / macOS. Please report the output of calibration/scripts/trace_decode.sh.\(esc)0m\n"
         } else {
-            if s.busySource == .host && s.sleptS > 1 {
-                o += String(format: "\(esc)2mANE busy from driver events: firmware task events are lost once the Mac has slept (%.0f min since boot); a reboot restores them\(esc)0m\n", s.sleptS / 60)
-            } else if s.busySource == .host {
-                o += "\(esc)2mANE busy from driver submit/complete events (firmware events absent); includes queueing time\(esc)0m\n"
-            } else if s.busyStatus == .unverified {
-                o += "\(esc)2mno ANE task events yet; idle cannot be confirmed from IOReport on this chip\(esc)0m\n"
-            }
             for (i, b) in s.busyPct.enumerated() {
                 let name = s.busyPct.count > 1 ? "ANE\(i) busy" : "ANE busy "
                 let avg = s.avgTaskMs[i].map { String(format: "%8.3f ms/task", $0) } ?? "               "
                 o += String(format: "%@  %@%@\(esc)0m %6.1f %%  %7.0f tasks/s %@\n",
                             name, color(b), bar(b / 100, barW), b, s.tasksPerS[i], avg)
-                if s.estimatedPct[i] > 20 {
-                    o += String(format: "\(esc)2m           %.0f%% of tasks were only partly reported by the firmware; their time is estimated\(esc)0m\n", s.estimatedPct[i])
-                }
             }
         }
-        if !s.aneState.isEmpty || s.anePowerOffInS != nil {
-            var st = s.aneState.enumerated().map { (i, v) in
-                let col = v == "running" ? "\(esc)32m" : v == "off" ? "\(esc)2m" : "\(esc)33m"
+        if !s.aneState.isEmpty {
+            let st = s.aneState.enumerated().map { (i, v) in
+                let col = v == "running" ? "\(esc)32m" : v == "off" ? "" : "\(esc)33m"
                 return "\(col)\(s.aneState.count > 1 ? "ANE\(i) " : "")\(v)\(esc)0m"
             }.joined(separator: " · ")
-            if let left = s.anePowerOffInS, let idle = s.aneIdleS {
-                st += String(format: "   \(esc)2midle %.1f s, powers off in %.1f s (first call after that ≈ 50 ms slower)\(esc)0m", idle, left)
-            } else if s.aneState.allSatisfy({ $0 == "off" }) && !s.aneState.isEmpty {
-                st += "   \(esc)2mpowered off: the next call boots the firmware first\(esc)0m"
-            }
             o += "State      \(st)\n"
         }
         if let t = s.throttlePct, t > 0 {
             o += String(format: "\(esc)31mThrottled  %.0f%% of the interval (%@)\(esc)0m\n", t, s.throttleKinds.joined(separator: ", "))
         }
         if let p = s.powerW {
-            // Full scale: the highest ANE power measured on this chip (M4: 3.4 W
-            // at 31 TOPS INT8), or the highest value seen so far on others.
-            let scale = maxMeasured ? "" : ", scale = max seen"
-            let src = s.powerSource == "smc_estimate"
-                ? "SMC rail − \(monitor.chipModel?.hostClusterName ?? "P cluster"), estimate" : "powermetrics estimate"
-            o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W   \(esc)2m(%@%@)\(esc)0m\n",
-                        bar(p / maxW, barW), p, src, scale)
-        } else if !monitor.hasPower {
-            o += "\(esc)2mPower      needs root (run with sudo)\(esc)0m\n"
-        } else if monitor.awaitingPowerBaseline {
-            o += "\(esc)2mPower      waiting for an idle ANE interval to set the baseline…\(esc)0m\n"
-        } else {
-            o += "\(esc)2mPower      waiting for powermetrics…\(esc)0m\n"
+            // Full scale: the calibrated peak, or the highest value seen if higher.
+            o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W\n", bar(p / maxW, barW), p)
         }
         if let h = s.hostCPUW {
-            let cluster = monitor.chipModel?.hostClusterName ?? "P cluster"
-            var line = String(format: "Host CPU   %6.2f W  \(esc)2m(%@ that runs the callers", h, cluster)
-            if let x = s.hostCPUExtraW { line += String(format: "; %.2f W above idle", x) }
-            line += ")\(esc)0m"
+            var line = String(format: "Host CPU   %6.2f W", h)
             if let x = s.hostCPUExtraW, let p = s.powerW, p > 0.3, x > p {
                 line += "\n\(esc)33m           the host spends more power than the ANE: many small calls? batch them or use a larger model\(esc)0m"
-            }
-            if h > 10, s.powerW != nil {
-                line += "\n\(esc)2m           P cores are busy too: the ANE power estimate is less accurate (about ±1 W)\(esc)0m"
             }
             o += line + "\n"
         }
         if let m = s.memoryPowerW {
-            o += String(format: "Memory     %6.2f W  \(esc)2m(DRAM rails, all clients)\(esc)0m\n", m)
+            o += String(format: "Memory     %6.2f W\n", m)
         }
         if let r = s.dramReadGBs, let maxR = monitor.maxReadGBs {
-            o += String(format: "DRAM read  \(esc)35m%@\(esc)0m %6.1f GB/s  \(esc)2m(scale = calibrated %.0f GB/s)\(esc)0m\n",
-                        bar(r / maxR, barW), r, maxR)
+            o += String(format: "DRAM read  \(esc)35m%@\(esc)0m %6.1f GB/s\n", bar(r / maxR, barW), r)
         }
-        var dram = s.dramReadGBs.map { r in String(format: "read %6.2f GB/s   write %6.2f GB/s", r, s.dramWriteGBs ?? 0) }
-            ?? "\(esc)2mn/a (no ANE DRAM counters on this chip)\(esc)0m"
+        var dram = s.dramReadGBs.map { r in String(format: "read %6.2f GB/s   write %6.2f GB/s   ", r, s.dramWriteGBs ?? 0) } ?? ""
         if let c = s.dramClippedPct, c > 10 {
             dram += String(format: "  \(esc)33m(lower bound: %.0f%% of samples at the histogram top)\(esc)0m", c)
         }
-        let irq = s.interruptsPerS.map { String(format: "interrupts %7.0f/s", $0) } ?? "\(esc)2minterrupts n/a\(esc)0m"
-        o += "DRAM       \(dram)   \(irq)\n"
-        if let lvl = s.dramLevel, let pct = s.dramLevelPct {
-            var line = String(format: "\(esc)2m           memory clock at %@ %.0f%% of the interval", lvl, pct)
-            if let peak = s.dramPeakGBs {
-                line += String(format: " (top level, peak %.1f GB/s", peak)
-                if let r = s.dramReadGBs { line += String(format: "; ANE traffic %.0f%% of it", 100 * (r + (s.dramWriteGBs ?? 0)) / peak) }
-                line += ")"
-            }
-            o += line + "\(esc)0m\n"
-        }
+        let irq = s.interruptsPerS.map { String(format: "interrupts %7.0f/s", $0) } ?? ""
+        if !dram.isEmpty || !irq.isEmpty { o += "DRAM       \(dram)\(irq)\n" }
         o += "\n"
         let sw = max(10, w - 14)
         for (i, h) in history.enumerated() {
@@ -184,9 +141,7 @@ final class TUI {
             o += String(format: "power     \(esc)36m%@\(esc)0m %4.1fW\n", spark(powerHistory, max: maxW, sw), maxW)
         }
         if !s.programs.isEmpty {
-            o += s.engines > 1
-                ? "\n\(esc)1mprograms\(esc)0m \(esc)2m(share of all \(s.engines) engines; a two-engine model runs one task on each per inference)\(esc)0m\n"
-                : "\n\(esc)1mprograms (ANE time this interval)\(esc)0m\n"
+            o += "\n\(esc)1mprograms\(esc)0m\n"
             o += "  process (pid)             handle      share   tasks/s    ms/task   mJ/task\n"
             for p in s.programs.prefix(8) {
                 let share = s.share(p)
@@ -202,7 +157,6 @@ final class TUI {
         if s.traceRestarts > 0 {
             o += "\(esc)33mkdebug buffer overflowed and was restarted \(s.traceRestarts)× — busy % may be low this interval\(esc)0m\n"
         }
-        o += "\n\(esc)2mq quit · busy % = time the ANE was executing a task (not how many of its cores or MACs were used)\(esc)0m\n"
         out(o)
     }
 }
