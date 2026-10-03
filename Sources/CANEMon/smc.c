@@ -23,7 +23,7 @@ typedef struct {
 } smc_msg;
 _Static_assert(sizeof(smc_msg) == 80, "AppleSMC message layout");
 
-enum { SMC_READ_BYTES = 5, SMC_READ_INFO = 9, SMC_SELECTOR = 2 };
+enum { SMC_READ_BYTES = 5, SMC_READ_INDEX = 8, SMC_READ_INFO = 9, SMC_SELECTOR = 2 };
 
 static io_connect_t conn;
 
@@ -44,10 +44,14 @@ static int call(smc_msg *in, smc_msg *out) {
                    out->result == 0 ? 0 : -1;
 }
 
+static uint32_t fourcc(const char *k) {
+    return (uint32_t)k[0] << 24 | (uint32_t)k[1] << 16 | (uint32_t)k[2] << 8 | (uint32_t)k[3];
+}
+
 int anemon_smc_read_float(const char *key, float *value) {
     if (!conn || strlen(key) != 4) return -1;
     smc_msg in = {0}, out;
-    in.key = (uint32_t)key[0] << 24 | (uint32_t)key[1] << 16 | (uint32_t)key[2] << 8 | (uint32_t)key[3];
+    in.key = fourcc(key);
     in.cmd = SMC_READ_INFO;
     if (call(&in, &out) || out.info.size != 4 || out.info.type != ('f' << 24 | 'l' << 16 | 't' << 8 | ' '))
         return -1;
@@ -55,6 +59,29 @@ int anemon_smc_read_float(const char *key, float *value) {
     in.cmd = SMC_READ_BYTES;
     if (call(&in, &out)) return -1;
     memcpy(value, out.bytes, 4);
+    return 0;
+}
+
+int anemon_smc_key_count(void) {
+    if (!conn) return -1;
+    smc_msg in = {0}, out;
+    in.key = fourcc("#KEY");
+    in.cmd = SMC_READ_INFO;
+    if (call(&in, &out) || out.info.size != 4) return -1;
+    in.info.size = 4;
+    in.cmd = SMC_READ_BYTES;
+    if (call(&in, &out)) return -1;
+    return (int)((uint32_t)out.bytes[0] << 24 | (uint32_t)out.bytes[1] << 16 | (uint32_t)out.bytes[2] << 8 | out.bytes[3]);
+}
+
+int anemon_smc_key_at(uint32_t index, char out_key[5]) {
+    if (!conn) return -1;
+    smc_msg in = {0}, out;
+    in.cmd = SMC_READ_INDEX;
+    in.data32 = index;
+    if (call(&in, &out)) return -1;
+    for (int i = 0; i < 4; i++) out_key[i] = (char)(out.key >> (24 - 8 * i));
+    out_key[4] = 0;
     return 0;
 }
 

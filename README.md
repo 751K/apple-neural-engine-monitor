@@ -20,6 +20,7 @@ sudo anemon             # full-screen view, q to quit
 anemon                  # without root: no busy %, tasks or programs
 anemon --json           # one JSON object per interval
 sudo anemon calibrate   # optional, about 2.5 min; M4 and M6 have built-in values
+sudo anemon diagnose    # other chips: about 2 min, writes a JSON report to send back
 ```
 
 Options: `--interval SECONDS` (default 1), `--count N`, `--no-power`. After

@@ -432,3 +432,62 @@ final class Monitor {
         memoryRails.forEach { $0.stop() }
     }
 }
+
+extension Monitor {
+    /// One snapshot as JSON fields (`anemon --json`). debug adds the raw
+    /// inputs of the power estimate and trace timing.
+    func fields(_ s: Snapshot, debug: Bool) -> [String: Any] {
+        var d: [String: Any] = [
+            "timestamp": ISO8601DateFormatter().string(from: s.time),
+            "interval_s": s.intervalS,
+        ]
+        d["validated"] = isValidated
+        d["calibrated"] = profile != nil
+        if trace != nil {
+            d["ane_busy_source"] = s.busySource.rawValue
+            d["ane_busy_status"] = s.busyStatus.rawValue
+            d["slept_since_boot_s"] = s.sleptS
+            // Unsupported: do not report a busy figure we cannot measure.
+            d["ane_busy_pct"] = s.busyStatus == .unsupported ? NSNull() : s.busyPct as Any
+            d["ane_tasks_per_s"] = s.tasksPerS
+            d["ane_avg_task_ms"] = s.avgTaskMs.map { $0 ?? NSNull() as Any }
+            d["ane_estimated_task_pct"] = s.estimatedPct
+            d["trace_events_per_s"] = s.traceEventsPerS
+            d["trace_restarts"] = s.traceRestarts
+            d["programs"] = s.programs.prefix(16).map {
+                ["handle": String(format: "0x%llx", $0.handle), "pid": $0.pid.map { Int($0) } as Any? ?? NSNull(),
+                 "process": $0.process ?? NSNull(), "tasks": $0.tasks, "busy_ms": $0.busyNs / 1e6,
+                 "energy_mj_per_task": s.energyPerTaskMJ($0) ?? NSNull()] as [String: Any]
+            }
+        } else {
+            d["ane_busy_pct"] = NSNull()
+            d["trace_error"] = traceError ?? NSNull()
+        }
+        d["ane_power_w"] = s.powerW ?? NSNull()
+        d["ane_power_source"] = s.powerSource ?? NSNull()
+        d["dram_read_gbs"] = s.dramReadGBs ?? NSNull()
+        d["dram_write_gbs"] = s.dramWriteGBs ?? NSNull()
+        d["dram_source"] = s.dramSource ?? NSNull()
+        d["dram_clipped_pct"] = s.dramClippedPct ?? NSNull()
+        if debug {
+            d["debug_rail_w"] = s.railW ?? NSNull()
+            d["debug_pcluster_w"] = s.pclusterW ?? NSNull()
+            d["debug_trace_max_late_ms"] = s.traceMaxLateMs
+            d["debug_trace_late_tasks"] = s.traceLateTasks
+            d["debug_trace_late_busy_ms"] = s.traceLateBusyMs
+        }
+        d["ane_interrupts_per_s"] = s.interruptsPerS ?? NSNull()
+        d["host_cpu_power_w"] = s.hostCPUW ?? NSNull()
+        d["host_cpu_extra_w"] = s.hostCPUExtraW ?? NSNull()
+        d["memory_power_w"] = s.memoryPowerW ?? NSNull()
+        d["ane_state"] = s.aneState.isEmpty ? NSNull() : s.aneState as Any
+        d["ane_idle_s"] = s.aneIdleS ?? NSNull()
+        d["ane_power_off_in_s"] = s.anePowerOffInS ?? NSNull()
+        d["ane_throttle_pct"] = s.throttlePct ?? NSNull()
+        d["ane_throttle_kinds"] = s.throttleKinds
+        d["dram_level"] = s.dramLevel ?? NSNull()
+        d["dram_level_pct"] = s.dramLevelPct ?? NSNull()
+        d["dram_peak_gbs"] = s.dramPeakGBs ?? NSNull()
+        return d
+    }
+}

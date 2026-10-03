@@ -164,7 +164,8 @@ static CFMutableDictionaryRef usable(anemon_ior *r, CFStringRef group, CFStringR
     return d;
 }
 
-anemon_ior *anemon_ior_open(void) {
+// Loads libIOReport and resolves its functions, without subscribing.
+static anemon_ior *ior_load(void) {
     void *lib = dlopen("/usr/lib/libIOReport.dylib", RTLD_LAZY);
     if (!lib) return NULL;
     anemon_ior *r = calloc(1, sizeof(*r));
@@ -188,6 +189,12 @@ anemon_ior *anemon_ior_open(void) {
         anemon_ior_close(r);
         return NULL;
     }
+    return r;
+}
+
+anemon_ior *anemon_ior_open(void) {
+    anemon_ior *r = ior_load();
+    if (!r) return NULL;
 
     // ANEMON_NO_AMC=1 skips the AMC byte counters, to test the histogram
     // fallback on a machine that has them. ANEMON_CHANNELS=1 subscribes every
@@ -382,4 +389,124 @@ void anemon_ior_close(anemon_ior *r) {
     if (r->subbed) CFRelease(r->subbed);
     if (r->lib) dlclose(r->lib);
     free(r);
+}
+
+// ---- anemon diagnose ----------------------------------------------------
+
+typedef CFDictionaryRef (*copy_all_fn)(uint64_t, uint64_t);
+
+static void visit_channels(anemon_ior *r, CFDictionaryRef d, int with_values, anemon_ior_visit_fn fn, void *ctx) {
+    CFArrayRef arr = CFDictionaryGetValue(d, CFSTR("IOReportChannels"));
+    CFIndex n = arr ? CFArrayGetCount(arr) : 0;
+    char grp[128], sub[128], name[128];
+    for (CFIndex i = 0; i < n; i++) {
+        CFDictionaryRef ch = CFArrayGetValueAtIndex(arr, i);
+        cfstr(r->group(ch), grp, sizeof grp);
+        cfstr(r->subgroup(ch), sub, sizeof sub);
+        cfstr(r->name(ch), name, sizeof name);
+        int fmt = r->format(ch);
+        if (!with_values) {
+            fn(ctx, grp, sub, name, fmt, 0, NULL, NULL);
+        } else if (fmt == 1) {
+            int64_t x = r->int_value(ch, 0);
+            fn(ctx, grp, sub, name, fmt, 1, NULL, &x);
+        } else if (fmt == 2) {
+            int32_t c = r->state_count(ch);
+            if (c <= 0) continue;
+            if (c > 64) c = 64;
+            char labels[64][48];
+            const char *lp[64];
+            int64_t vals[64];
+            for (int32_t j = 0; j < c; j++) {
+                cfstr(r->state_name(ch, j), labels[j], sizeof labels[j]);
+                lp[j] = labels[j];
+                vals[j] = r->residency(ch, j);
+            }
+            fn(ctx, grp, sub, name, fmt, c, lp, vals);
+        } else {
+            fn(ctx, grp, sub, name, fmt, 0, NULL, NULL);
+        }
+    }
+}
+
+int anemon_ior_list_all(anemon_ior_visit_fn fn, void *ctx) {
+    anemon_ior *r = ior_load();
+    if (!r) return -1;
+    copy_all_fn copy_all = (copy_all_fn)dlsym(r->lib, "IOReportCopyAllChannels");
+    CFDictionaryRef all = copy_all ? copy_all(0, 0) : NULL;
+    if (!all) {
+        anemon_ior_close(r);
+        return -1;
+    }
+    visit_channels(r, all, 0, fn, ctx);
+    CFRelease(all);
+    anemon_ior_close(r);
+    return 0;
+}
+
+anemon_ior *anemon_ior_open_all(int *unsubscribed) {
+    *unsubscribed = 0;
+    anemon_ior *r = ior_load();
+    if (!r) return NULL;
+    copy_all_fn copy_all = (copy_all_fn)dlsym(r->lib, "IOReportCopyAllChannels");
+    CFDictionaryRef all = copy_all ? copy_all(0, 0) : NULL;
+    if (!all) {
+        anemon_ior_close(r);
+        return NULL;
+    }
+    // Unique group / subgroup pairs, each subscribed on its own so that one
+    // refused group does not silently drop the others from a merged set.
+    CFMutableSetRef seen = CFSetCreateMutable(NULL, 0, &kCFTypeSetCallBacks);
+    CFMutableDictionaryRef chans = NULL;
+    CFArrayRef arr = CFDictionaryGetValue(all, CFSTR("IOReportChannels"));
+    for (CFIndex i = 0; arr && i < CFArrayGetCount(arr); i++) {
+        CFDictionaryRef ch = CFArrayGetValueAtIndex(arr, i);
+        CFStringRef g = r->group(ch), s = r->subgroup(ch);
+        if (!g) continue;
+        CFStringRef key = CFStringCreateWithFormat(NULL, NULL, CFSTR("%@\x1f%@"), g, s ? s : CFSTR(""));
+        int fresh = !CFSetContainsValue(seen, key);
+        if (fresh) CFSetAddValue(seen, key);
+        CFRelease(key);
+        if (!fresh) continue;
+        CFMutableDictionaryRef part = usable(r, g, s, NULL);
+        if (!part) {
+            (*unsubscribed)++;
+            continue;
+        }
+        if (!chans) {
+            chans = part;
+        } else {
+            r->merge(chans, part, NULL);
+            CFRelease(part);
+        }
+    }
+    CFRelease(seen);
+    CFRelease(all);
+    if (!chans) {
+        anemon_ior_close(r);
+        return NULL;
+    }
+    r->sub = r->create_sub(NULL, chans, &r->subbed, 0, NULL);
+    CFRelease(chans);
+    if (!r->sub || !r->subbed) {
+        anemon_ior_close(r);
+        return NULL;
+    }
+    return r;
+}
+
+int anemon_ior_visit(anemon_ior *r, anemon_ior_visit_fn fn, void *ctx) {
+    CFDictionaryRef cur = r->create_samples(r->sub, r->subbed, NULL);
+    if (!cur) return -1;
+    if (!r->prev) {
+        r->prev = cur;
+        return 1;
+    }
+    CFDictionaryRef d = r->delta(r->prev, cur, NULL);
+    CFRelease(r->prev);
+    r->prev = cur;
+    if (!d) return -1;
+    visit_channels(r, d, 1, fn, ctx);
+    CFRelease(d);
+    return 0;
 }

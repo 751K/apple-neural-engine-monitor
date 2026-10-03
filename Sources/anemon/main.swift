@@ -3,6 +3,7 @@ import Foundation
 let usage = """
 usage: sudo anemon [--interval SECONDS] [--json] [--count N] [--no-power]
        sudo anemon calibrate
+       sudo anemon diagnose
 
 Monitors the Apple Neural Engine:
   busy %     time the ANE spent executing tasks (kdebug firmware events, root)
@@ -19,10 +20,17 @@ expose counters that anemon currently recognizes.
 power and bandwidth data, peak compute, and busy % against known duty cycles.
 Power may be unavailable; bandwidth may be estimated if DRAM counters are
 missing. Results are saved for later runs.
+
+`anemon diagnose` (about 3 min) records every IOReport channel and SMC power
+key while running reference workloads, and writes anemon-diagnose-<chip>.json
+to the current directory: for chips anemon does not know yet. The file holds
+the chip model, macOS version, channel names and readings; nothing personal.
 """
 
-if CommandLine.arguments.dropFirst().first == "calibrate" {
-    exit(Calibrate.run())
+switch CommandLine.arguments.dropFirst().first {
+case "calibrate": exit(Calibrate.run())
+case "diagnose": exit(Diagnose.run())
+default: break
 }
 
 var interval = 1.0
@@ -62,58 +70,7 @@ for sig in [SIGINT, SIGTERM, SIGHUP] {
 let debug = ProcessInfo.processInfo.environment["ANEMON_DEBUG"] != nil
 
 func jsonLine(_ s: Snapshot) -> String {
-    var d: [String: Any] = [
-        "timestamp": ISO8601DateFormatter().string(from: s.time),
-        "interval_s": s.intervalS,
-    ]
-    d["validated"] = monitor.isValidated
-    d["calibrated"] = monitor.profile != nil
-    if monitor.trace != nil {
-        d["ane_busy_source"] = s.busySource.rawValue
-        d["ane_busy_status"] = s.busyStatus.rawValue
-        d["slept_since_boot_s"] = s.sleptS
-        // Unsupported: do not report a busy figure we cannot measure.
-        d["ane_busy_pct"] = s.busyStatus == .unsupported ? NSNull() : s.busyPct as Any
-        d["ane_tasks_per_s"] = s.tasksPerS
-        d["ane_avg_task_ms"] = s.avgTaskMs.map { $0 ?? NSNull() as Any }
-        d["ane_estimated_task_pct"] = s.estimatedPct
-        d["trace_events_per_s"] = s.traceEventsPerS
-        d["trace_restarts"] = s.traceRestarts
-        d["programs"] = s.programs.prefix(16).map {
-            ["handle": String(format: "0x%llx", $0.handle), "pid": $0.pid.map { Int($0) } as Any? ?? NSNull(),
-             "process": $0.process ?? NSNull(), "tasks": $0.tasks, "busy_ms": $0.busyNs / 1e6,
-             "energy_mj_per_task": s.energyPerTaskMJ($0) ?? NSNull()] as [String: Any]
-        }
-    } else {
-        d["ane_busy_pct"] = NSNull()
-        d["trace_error"] = monitor.traceError ?? NSNull()
-    }
-    d["ane_power_w"] = s.powerW ?? NSNull()
-    d["ane_power_source"] = s.powerSource ?? NSNull()
-    d["dram_read_gbs"] = s.dramReadGBs ?? NSNull()
-    d["dram_write_gbs"] = s.dramWriteGBs ?? NSNull()
-    d["dram_source"] = s.dramSource ?? NSNull()
-    d["dram_clipped_pct"] = s.dramClippedPct ?? NSNull()
-    if debug {
-        d["debug_rail_w"] = s.railW ?? NSNull()
-        d["debug_pcluster_w"] = s.pclusterW ?? NSNull()
-        d["debug_trace_max_late_ms"] = s.traceMaxLateMs
-        d["debug_trace_late_tasks"] = s.traceLateTasks
-        d["debug_trace_late_busy_ms"] = s.traceLateBusyMs
-    }
-    d["ane_interrupts_per_s"] = s.interruptsPerS ?? NSNull()
-    d["host_cpu_power_w"] = s.hostCPUW ?? NSNull()
-    d["host_cpu_extra_w"] = s.hostCPUExtraW ?? NSNull()
-    d["memory_power_w"] = s.memoryPowerW ?? NSNull()
-    d["ane_state"] = s.aneState.isEmpty ? NSNull() : s.aneState as Any
-    d["ane_idle_s"] = s.aneIdleS ?? NSNull()
-    d["ane_power_off_in_s"] = s.anePowerOffInS ?? NSNull()
-    d["ane_throttle_pct"] = s.throttlePct ?? NSNull()
-    d["ane_throttle_kinds"] = s.throttleKinds
-    d["dram_level"] = s.dramLevel ?? NSNull()
-    d["dram_level_pct"] = s.dramLevelPct ?? NSNull()
-    d["dram_peak_gbs"] = s.dramPeakGBs ?? NSNull()
-    let data = try! JSONSerialization.data(withJSONObject: d, options: [.sortedKeys])
+    let data = try! JSONSerialization.data(withJSONObject: monitor.fields(s, debug: debug), options: [.sortedKeys])
     return String(decoding: data, as: UTF8.self)
 }
 

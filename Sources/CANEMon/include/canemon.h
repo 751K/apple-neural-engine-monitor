@@ -119,6 +119,26 @@ int anemon_ior_sample(anemon_ior *r, anemon_ior_values *v);
 
 void anemon_ior_close(anemon_ior *r);
 
+// `anemon diagnose`: every channel the kernel offers, for a chip whose
+// channel names are not known yet.
+//
+// Called once per channel. values holds nvalues entries: one integer for a
+// simple counter (labels NULL), or the residency of each state, named by
+// labels, for a state or histogram channel. Other formats pass nvalues 0.
+typedef void (*anemon_ior_visit_fn)(void *ctx, const char *group, const char *subgroup, const char *name,
+                                    int format, int nvalues, const char *const *labels, const int64_t *values);
+
+// Lists every channel of every group, without values or subscribing.
+int anemon_ior_list_all(anemon_ior_visit_fn fn, void *ctx);
+
+// Subscribes every group / subgroup that can be subscribed on its own.
+// *unsubscribed is set to the number of group / subgroup pairs refused.
+anemon_ior *anemon_ior_open_all(int *unsubscribed);
+
+// Takes a sample and calls fn with each channel's delta since the previous
+// call. The first call only primes the baseline and returns 1.
+int anemon_ior_visit(anemon_ior *r, anemon_ior_visit_fn fn, void *ctx);
+
 // ---- SMC ----------------------------------------------------------------
 
 // Opens the AppleSMC user client (no root needed). Returns 0 on success.
@@ -126,6 +146,10 @@ int anemon_smc_open(void);
 
 // Reads a 4-byte float key such as "PP0b". Returns 0 on success.
 int anemon_smc_read_float(const char *key, float *out);
+
+// Number of SMC keys, and the key at an index (4 characters plus NUL).
+int anemon_smc_key_count(void);
+int anemon_smc_key_at(uint32_t index, char out[5]);
 
 void anemon_smc_close(void);
 
