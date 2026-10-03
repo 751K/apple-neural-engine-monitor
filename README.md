@@ -153,12 +153,9 @@ busy % against the share of wall time spent in the ANE on the host:
 - `anemon calibrate` (2026-10-03, random inputs): INT8 5×5 peak load 72.6 TOPS
   at 10.1 W (PP0b rail, median of the steady phase), read bandwidth
   123.8 GB/s, busy check 95.1 / 47.7% against 100 / 50.2%. These values are
-  built in for M6 machines without a calibration. Earlier builds reported
-  14–16 W at full INT8 load (maxima, before the cluster-offset changes; not
-  re-examined), matching the rise in
-  the supply rail within 0.2 W; the whole machine rose by about 21.5 W. The
-  same load with all-zero inputs reads about 5 W. Readings return to 0 within
-  two seconds. Generating text with a
+  built in for M6 machines without a calibration. The same load with
+  all-zero inputs reads about 5 W. Readings return to 0 within two seconds.
+  Generating text with a
   4B language model (Core ML, 85% busy, 74 GB/s read) read 2.4 W, while the
   whole machine drew 12.3 W. For a real model there is no independent ANE
   reading to check this against.

@@ -64,15 +64,12 @@ zeros). The same workloads on the M6, zero against random inputs:
 
 | Workload | Zero inputs | Random inputs |
 |---|---:|---:|
-| calibration peak (INT8 5×5, 1024 ch, 4 layers) | 80.1 TOPS, 5.1 W | 69.2 TOPS, 15.1 W (earlier build, maximum; 2026-10-03 calibration: 72.6 TOPS, 10.1 W median) |
-| INT8 3×3, 512 ch, 8 layers | 106 TOPS | 85–91 TOPS; 14–16 W over 30 s |
+| calibration peak (INT8 5×5, 1024 ch, 4 layers) | 80.1 TOPS, 5.1 W | 72.6 TOPS, 10.1 W |
+| INT8 3×3, 512 ch, 8 layers | 106 TOPS | 85–91 TOPS |
 | FP16 3×3, 512 ch, 8 layers | 55.5 TOPS | 50.1 TOPS |
 | calibration bandwidth (FP16 1×1 GEMV) | 131.8 GB/s, 2.6 W | 132.4 GB/s, 2.7 W |
 
-Power is anemon's SMC estimate; under random INT8 load it matched the rise of
-`PP0b` within 0.2 W, with P-cluster power unchanged, and `PDTR` (whole
-machine) rose from 1.2 W to 23–26 W. Over 30 s at full load the reading fell
-from 16.0 W to 14.0 W. On the M4, zero and random inputs give the same
+Power is anemon's SMC rail estimate (median of the steady phase). On the M4, zero and random inputs give the same
 throughput (36.5 against 36.7 TOPS, 18.8 against 18.8 TOPS), but not the
 same power: `powermetrics` read 4.14 W for eight chained 5×5 INT8 convs (1024
 ch, 38.3 TOPS) with zero inputs and 12.93 W with random inputs, and the
