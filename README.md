@@ -4,6 +4,8 @@ A terminal monitor for the Apple Neural Engine (ANE) on Apple Silicon Macs.
 It shows how much of the time the ANE is executing work, which processes are
 using it, how much memory traffic it generates and how much power it draws.
 
+Developed by Kong.
+
 ```
 make
 sudo .build/make/anemon calibrate   # once per machine, about 2 min

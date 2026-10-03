@@ -75,7 +75,7 @@ final class TUI {
         let df = DateFormatter()
         df.dateFormat = "HH:mm:ss"
         var o = "\(esc)H\(esc)2J"
-        o += "\(esc)1manemon\(esc)0m  Apple Neural Engine monitor   \(esc)2m\(device.chip) · \(device.architecture) · \(device.cores) cores · \(df.string(from: s.time))\(esc)0m\n"
+        o += "\(esc)1mAnemon\(esc)0m  Apple Neural Engine monitor \(esc)2m· developed by Kong\(esc)0m   \(esc)2m\(device.chip) · \(device.architecture) · \(device.cores) cores · \(df.string(from: s.time))\(esc)0m\n"
         o += String(repeating: "─", count: w) + "\n"
         if !monitor.isValidated {
             let os = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
