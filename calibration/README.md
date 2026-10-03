@@ -44,23 +44,27 @@ README describes both methods and their check against anebench workloads.
 
 ### M6 calibration result (h18g, 32 cores, macOS 27.0.1)
 
-The latest calibration (2026-09-30) passed the busy check:
+The latest calibration (2026-10-03, random inputs) passed the busy check:
 
 | Workload | Host | anemon | Result |
 |---|---:|---:|---|
-| a8w8 3×3 conv ×3, 10.3 ms/eval, 100% duty | 100.0% | 96.5% | pass |
-| same, 50% duty | 48.8% | 48.3% | pass |
+| a8w8 3×3 conv ×3, 11.5 ms/eval, 100% duty | 100.0% | 95.1% | pass |
+| same, 50% duty | 50.2% | 47.7% | pass |
 
-It also reported 75.9 INT8 TOPS, ANE power 0.00 W idle and 4.96 W under the
-INT8 convolution stack (SMC estimate), and 132.5 GB/s read bandwidth from
-weight bytes per evaluation time. Those runs fed all-zero inputs, which the
-M6 ANE processes faster and at far lower power than real data. anebench now
+It reported 72.6 INT8 TOPS, ANE power 0.00 W idle and 10.1 W under the INT8
+5×5 peak load (PP0b rail estimate, median of the steady phase), and
+123.8 GB/s read bandwidth from weight bytes per evaluation time. These values
+are built into anemon for M6 machines without their own calibration.
+
+The earlier calibration (2026-09-30: 75.9 TOPS, 4.96 W, 132.5 GB/s) fed
+all-zero inputs, which the M6 ANE processes faster and at far lower power
+than real data. anebench now
 fills inputs with random FP16 values by default (`ANERUN_FILL=zero` restores
 zeros). The same workloads on the M6, zero against random inputs:
 
 | Workload | Zero inputs | Random inputs |
 |---|---:|---:|
-| calibration peak (INT8 5×5, 1024 ch, 4 layers) | 80.1 TOPS, 5.1 W | 69.2 TOPS, 15.1 W |
+| calibration peak (INT8 5×5, 1024 ch, 4 layers) | 80.1 TOPS, 5.1 W | 69.2 TOPS, 15.1 W (earlier build, maximum; 2026-10-03 calibration: 72.6 TOPS, 10.1 W median) |
 | INT8 3×3, 512 ch, 8 layers | 106 TOPS | 85–91 TOPS; 14–16 W over 30 s |
 | FP16 3×3, 512 ch, 8 layers | 55.5 TOPS | 50.1 TOPS |
 | calibration bandwidth (FP16 1×1 GEMV) | 131.8 GB/s, 2.6 W | 132.4 GB/s, 2.7 W |

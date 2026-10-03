@@ -159,11 +159,14 @@ final class Monitor {
 
     /// Configurations where busy % was checked against known workloads when
     /// anemon was written; `anemon calibrate` adds the local machine.
-    static let validated: [(arch: String, macOSMajor: Int)] = [("h16g", 27)]
-    /// ANE power at the calibration peak load per architecture (W), for the
-    /// power bar when this machine has no calibration: h16g, PP0b rail
-    /// estimate under the INT8 5x5 peak load with random inputs.
-    static let maxPowerW: [String: Double] = ["h16g": 11.5]
+    static let validated: [(arch: String, macOSMajor: Int)] = [("h16g", 27), ("h18g", 27)]
+    /// Built-in calibration, used when this machine has none: ANE power at the
+    /// calibration peak load (W, PP0b rail estimate, INT8 5x5 with random
+    /// inputs, median of the steady phase) and read bandwidth (GB/s, weight
+    /// bytes of an FP16 GEMV per evaluation). M4 Mac mini and M6, macOS 27.0.1,
+    /// `anemon calibrate` on 2026-10-03.
+    static let maxPowerW: [String: Double] = ["h16g": 11.5, "h18g": 10.1]
+    static let builtinReadGBs: [String: Double] = ["h16g": 64.6, "h18g": 123.8]
     private var observedMaxPowerW = 1.0
     /// This machine's calibration, from `sudo anemon calibrate`.
     let profile: Profile?
@@ -183,7 +186,7 @@ final class Monitor {
     }
 
     /// Calibrated ANE read bandwidth, for the DRAM bar.
-    var maxReadGBs: Double? { profile?.maxReadGBs }
+    var maxReadGBs: Double? { profile?.maxReadGBs ?? Self.builtinReadGBs[device.architecture] }
 
     init(intervalS: Double, useTrace: Bool, usePower: Bool) {
         self.intervalS = intervalS

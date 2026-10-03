@@ -98,7 +98,8 @@ other ANE and GPU work first). It measures idle and peak ANE power, peak INT8
 throughput and read bandwidth, and checks busy % against the host at 100% and
 50% duty; the check passes within 5 points. The profile is saved to
 `/Library/Application Support/anemon/<architecture>.json` and sets the scale of
-the power and DRAM bars.
+the power and DRAM bars. M4 and M6 have built-in values from a reference
+calibration, used when the machine has no profile of its own.
 
 ## Validation
 
@@ -124,7 +125,9 @@ busy % against the share of wall time spent in the ANE on the host:
   FP16 3×3 conv chain the rail gives about 9.5 W against 9.6 W from
   `powermetrics`. Measured earlier with all-zero inputs (powermetrics): 0.66 W
   with tiny tasks, 2.1–2.6 W for FP16 convolutions, 3.4–4.1 W for INT8.
-- Read bandwidth 66 GB/s, matching the weight traffic of the test GEMV.
+- Read bandwidth 64.6–66 GB/s, matching the weight traffic of the test GEMV.
+  The 2026-10-03 calibration (11.5 W, 64.6 GB/s, busy check 98.3 / 50.7%)
+  is built in for M4 machines without their own calibration.
 - A MacBook Air M4 with SIP enabled gave the same results.
 
 ### M6
@@ -147,7 +150,12 @@ busy % against the share of wall time spent in the ANE on the host:
 | 50% | 59.8 GB/s | 50–55 GB/s |
 | 25% | 28.1 GB/s | 25 GB/s |
 
-- Power at full INT8 load with random inputs: 14–16 W, matching the rise in
+- `anemon calibrate` (2026-10-03, random inputs): INT8 5×5 peak load 72.6 TOPS
+  at 10.1 W (PP0b rail, median of the steady phase), read bandwidth
+  123.8 GB/s, busy check 95.1 / 47.7% against 100 / 50.2%. These values are
+  built in for M6 machines without a calibration. Earlier builds reported
+  14–16 W at full INT8 load (maxima, before the cluster-offset changes; not
+  re-examined), matching the rise in
   the supply rail within 0.2 W; the whole machine rose by about 21.5 W. The
   same load with all-zero inputs reads about 5 W. Readings return to 0 within
   two seconds. Generating text with a
