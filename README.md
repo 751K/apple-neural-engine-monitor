@@ -70,7 +70,7 @@ ANE figures measured with `anemon calibrate` and `anemon diagnose`:
 | ANE | 16 cores | 16 cores | 2 × 16 cores |
 | macOS | 27.0.1 | 27.0.0 | 27.0.1 |
 | INT8, 5×5 conv stack | 37.7 TOPS | 30.0 TOPS | 71.2 TOPS |
-| INT8, 3×3 conv stack | 31.7 TOPS | 38.2 TOPS | – |
+| INT8, 3×3 conv stack | 31.7 TOPS | 38.2 TOPS | 59.1 TOPS ² |
 | DRAM read (FP16 GEMV) | 65.3 GB/s | 69.0 GB/s | 123.7 GB/s |
 | Peak ANE power | 12.8 W | 6.2 W ¹ | 16.2 W |
 | busy % at 100 / 50% duty | 98.2 / 50.5% (host 100 / 50.6) | 98.8 / 51.7% (host 100 / 52.8) | 96.6 / 48.3% (host 100 / 50.9) |
@@ -79,6 +79,8 @@ TOPS count the model's nominal multiply-adds per second at batch 1; the
 compiler maps kernel sizes differently on each chip, so no single load shows
 every chip's peak. DRAM read is the weight bytes the GEMV streams per second.
 ¹ From one `anemon diagnose` run (PP0b estimate), not a calibration.
+² 0.65 ms per evaluation, so the host's 0.3–0.6 ms of overhead per call on
+M6 holds it back; the same stack at 128×128 runs at 85–91 TOPS.
 
 ## Calibration
 

@@ -290,8 +290,10 @@ From `anemon diagnose` and `anemon calibrate` on macOS 27.0.0:
 | 19.4 ms tasks, continuous / 50% duty (calibration) | 100 / 50.9% | 96.6 / 48.3% |
 | two processes, 3.9 ms tasks | 100% | 99.9–100% |
 
-- Peak INT8 throughput: 71–73 TOPS on the 5×5 stack, 85–91 TOPS on the 3×3
-  stack; FP16 50 TOPS.
+- Peak INT8 throughput: 68–73 TOPS on the 5×5 stack. The 3×3 stack (512
+  channels, 8 layers) reaches 85–91 TOPS at 128×128 but only 59.1 TOPS at the
+  calibration's 32×32, where each evaluation takes 0.65 ms and the per-call
+  host overhead dominates. FP16 50 TOPS at 128×128.
 - Power, PP0b estimate: 16.2–17 W on the INT8 3×3 stack, 8.9–13.3 W on the
   5×5 stack, with brief ADCLK and DITHER throttling. Readings return to 0
   within two seconds of the load stopping.
