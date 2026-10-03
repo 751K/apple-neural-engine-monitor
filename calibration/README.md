@@ -48,13 +48,16 @@ The latest calibration (2026-10-03, random inputs) passed the busy check:
 
 | Workload | Host | anemon | Result |
 |---|---:|---:|---|
-| a8w8 3×3 conv ×3, 11.5 ms/eval, 100% duty | 100.0% | 95.1% | pass |
-| same, 50% duty | 50.2% | 47.7% | pass |
+| a8w8 3×3 conv ×5, 19.4 ms/eval, 100% duty | 100.0% | 96.6% | pass |
+| same, 50% duty | 50.9% | 48.3% | pass |
 
-It reported 72.6 INT8 TOPS, ANE power 0.00 W idle and 10.1 W under the INT8
-5×5 peak load (PP0b rail estimate, median of the steady phase), and
-123.8 GB/s read bandwidth from weight bytes per evaluation time. These values
-are built into anemon for M6 machines without their own calibration.
+It reported 71.2 INT8 TOPS, ANE power 0.00 W idle and 16.2 W peak (INT8 3×3
+stack; the 5×5 peak-compute load read 8.9 W in this run and 10.1–13.3 W in
+two others), and 123.7 GB/s read bandwidth from weight bytes per evaluation
+time. These values are built into anemon for M6 machines without their own
+calibration. With 10–12 ms busy-check tasks the full-duty reading was
+94.9–95.1%, right at the 5-point limit: the host share includes 0.4–0.6 ms of
+submit/complete overhead per two-engine call.
 
 The earlier calibration (2026-09-30: 75.9 TOPS, 4.96 W, 132.5 GB/s) fed
 all-zero inputs, which the M6 ANE processes faster and at far lower power
@@ -64,8 +67,8 @@ zeros). The same workloads on the M6, zero against random inputs:
 
 | Workload | Zero inputs | Random inputs |
 |---|---:|---:|
-| calibration peak (INT8 5×5, 1024 ch, 4 layers) | 80.1 TOPS, 5.1 W | 72.6 TOPS, 10.1 W |
-| INT8 3×3, 512 ch, 8 layers | 106 TOPS | 85–91 TOPS; about 17 W (2026-10-03) |
+| calibration peak (INT8 5×5, 1024 ch, 4 layers) | 80.1 TOPS, 5.1 W | 71–73 TOPS, 8.9–13.3 W |
+| INT8 3×3, 512 ch, 8 layers | 106 TOPS | 85–91 TOPS; 16.2–17 W |
 | FP16 3×3, 512 ch, 8 layers | 55.5 TOPS | 50.1 TOPS |
 | calibration bandwidth (FP16 1×1 GEMV) | 131.8 GB/s, 2.6 W | 132.4 GB/s, 2.7 W |
 

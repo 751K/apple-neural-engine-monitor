@@ -4,8 +4,6 @@ A terminal monitor for the Apple Neural Engine (ANE) on Apple Silicon Macs.
 It shows how much of the time the ANE is executing work, which processes are
 using it, how much memory traffic it generates and how much power it draws.
 
-Developed by Kong.
-
 ```
 make
 sudo .build/make/anemon calibrate   # once per machine, about 2 min
@@ -123,9 +121,14 @@ Each line is one interval. Besides the metrics above:
 ## Calibration
 
 `sudo anemon calibrate` runs reference workloads for about two minutes (close
-other ANE and GPU work first). It measures idle and peak ANE power, peak INT8
+other ANE and GPU work first). It measures idle ANE power, peak INT8
 throughput and read bandwidth, and checks busy % against the host at 100% and
-50% duty; the check passes within 5 points. The profile is saved to
+50% duty; the check passes within 5 points. Peak power is the larger of two
+loads, because the highest-compute load is not the highest-power one: the
+INT8 5×5 stack used for peak throughput, and a stack of smaller INT8 3×3
+convolutions (on M6 about 9–13 W and 16 W). The busy check uses tasks of at
+least 20 ms, so that the host's submit/complete overhead per call (up to
+0.6 ms on M6) stays near 2–3%. The profile is saved to
 `/Library/Application Support/anemon/<architecture>.json` and sets the scale of
 the power and DRAM bars. M4 and M6 have built-in values from a reference
 calibration, used when the machine has no profile of its own.
@@ -149,13 +152,14 @@ busy % against the share of wall time spent in the ANE on the host:
 
 - Two processes sharing the ANE: 100% busy, no task events lost, each attributed to its own PID.
 - Peak INT8 throughput 35–38 TOPS across runs (theoretical 38.4).
-- Power at full INT8 load (38 TOPS) with random inputs: 11.5 W from the PP0b
-  rail (median, `anemon calibrate`); `powermetrics` reads 12.9–13.1 W. On an
+- Power with random inputs, PP0b rail (median, `anemon calibrate`): 12.8 W on
+  the INT8 3×3 stack, 11.3 W at full INT8 throughput (38 TOPS, 5×5 stack;
+  `powermetrics` reads 12.9–13.1 W there). On an
   FP16 3×3 conv chain the rail gives about 9.5 W against 9.6 W from
   `powermetrics`. Measured earlier with all-zero inputs (powermetrics): 0.66 W
   with tiny tasks, 2.1–2.6 W for FP16 convolutions, 3.4–4.1 W for INT8.
 - Read bandwidth 64.6–66 GB/s, matching the weight traffic of the test GEMV.
-  The 2026-10-03 calibration (11.5 W, 64.6 GB/s, busy check 98.3 / 50.7%)
+  The 2026-10-03 calibration (12.8 W, 65.3 GB/s, busy check 98.2 / 50.5%)
   is built in for M4 machines without their own calibration.
 - A MacBook Air M4 with SIP enabled gave the same results.
 
@@ -179,12 +183,12 @@ busy % against the share of wall time spent in the ANE on the host:
 | 50% | 59.8 GB/s | 50–55 GB/s |
 | 25% | 28.1 GB/s | 25 GB/s |
 
-- `anemon calibrate` (2026-10-03, random inputs): INT8 5×5 peak load 72.6 TOPS
-  at 10.1 W (PP0b rail, median of the steady phase), read bandwidth
-  123.8 GB/s, busy check 95.1 / 47.7% against 100 / 50.2%. These values are
-  built in for M6 machines without a calibration. An INT8 3×3 conv stack
-  (512 channels, 32×32, 8 layers) draws more: about 17 W, with brief ADCLK and
-  DITHER throttling (1–2% of the time). The calibration load with
+- `anemon calibrate` (2026-10-03, random inputs): peak compute 71–73 TOPS
+  INT8; peak power 16.2–16.4 W on the INT8 3×3 stack (the 5×5 peak-compute
+  load read 8.9–13.3 W across three runs), with brief ADCLK and DITHER
+  throttling; read bandwidth 123.8 GB/s; busy check 96.6 / 48.3% against
+  100 / 50.9%. These values are built in for M6 machines without a
+  calibration. The 5×5 calibration load with
   all-zero inputs reads about 5 W. Readings return to 0 within two seconds.
   Generating text with a
   4B language model (Core ML, 85% busy, 74 GB/s read) read 2.4 W, while the

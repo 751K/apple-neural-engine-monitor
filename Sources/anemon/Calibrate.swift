@@ -81,14 +81,14 @@ enum Calibrate {
 
         // 1. Idle.
         _ = monitor.snapshot()
-        print("[1/4] idle baseline…")
+        print("[1/5] idle baseline…")
         // Long enough for the SMC rail estimate to learn its idle baseline
         // (three idle readings after 2 s of idleness).
         let idle = sample(8, skip: 1)
         let idlePower = median(idle.compactMap(\.powerW))
 
         // 2. Peak compute: chained 5x5 INT8 convolutions (38 TOPS on M4).
-        print("[2/4] peak compute (INT8 5x5 conv, 4 layers)…")
+        print("[2/5] peak compute (INT8 5x5 conv, 4 layers)…")
         var peakTOPS: Double?
         var maxPower: Double?
         if let m = runner.generate("peak", "a8w8", "conv", 1024, 1024, 128, 128, 5, layers: 4) {
@@ -99,9 +99,23 @@ enum Calibrate {
             // single reading should set the power bar's full scale.
             maxPower = median(snaps.compactMap(\.powerW))
         }
+        let computePower = maxPower
 
-        // 3. Read bandwidth: a tall FP16 GEMV streams its weights from DRAM.
-        print("[3/4] DRAM read bandwidth (FP16 2560x65536 GEMV)…")
+        // 3. Peak power: the highest-compute load is not the highest-power one.
+        // A stack of smaller INT8 3x3 convolutions draws more (M6: about 17 W
+        // against 10 W for the 5x5 stack), so measure it too and keep the larger.
+        print("[3/5] peak power (INT8 3x3 conv, 512 channels, 8 layers)…")
+        var stackPower: Double?
+        if let m = runner.generate("power", "a8w8", "conv", 512, 512, 32, 32, 3, layers: 8) {
+            let job = runner.start(m.dir, seconds: 14)
+            let snaps = sample(13, skip: 4)
+            _ = job.finish()
+            stackPower = median(snaps.compactMap(\.powerW))
+        }
+        if let p = stackPower { maxPower = max(maxPower ?? 0, p) }
+
+        // 4. Read bandwidth: a tall FP16 GEMV streams its weights from DRAM.
+        print("[4/5] DRAM read bandwidth (FP16 2560x65536 GEMV)…")
         var maxRead: Double?
         if let m = runner.generate("bw", "fp16", "conv", 2560, 65536, 1, 1, 1) {
             let job = runner.start(m.dir, seconds: 10)
@@ -115,18 +129,20 @@ enum Calibrate {
             }
         }
 
-        // 4. Busy % against workloads whose share of wall time is known.
-        print("[4/4] busy % check (tasks of at least 10 ms at 100% and 50% duty)…")
+        // 5. Busy % against workloads whose share of wall time is known.
+        print("[5/5] busy % check (tasks of at least 20 ms at 100% and 50% duty)…")
         var checks: [Profile.BusyCheck] = []
         var source = BusySource.none
-        // The host share includes the per-evaluation submit/complete overhead
-        // (about 0.2 ms), when the ANE is really idle. Stack layers until one
-        // evaluation takes at least 10 ms so that overhead stays near 2% on
-        // fast chips too (one layer takes 3.9 ms on M6, 10 ms on M4).
+        // The host share includes the per-evaluation submit/complete overhead,
+        // when the ANE is really idle: about 0.2 ms on M4, 0.4-0.6 ms for a
+        // model run on both M6 engines. Stack layers until one evaluation takes
+        // at least 20 ms so that overhead stays near 2-3% (at 10-12 ms per
+        // evaluation M6 read 95% busy at 100% duty, right at the 5-point limit).
+        // One layer takes 3.9 ms on M6, 10 ms on M4.
         var busyModel = monitor.trace != nil ? runner.generate("busy", "a8w8", "conv", 1024, 1024, 128, 128, 3) : nil
         var layers = 1
-        if let m = busyModel, let r = runner.start(m.dir, seconds: 2).finish(), r.msPerEval < 10 {
-            layers = Int((10 / r.msPerEval).rounded(.up))
+        if let m = busyModel, let r = runner.start(m.dir, seconds: 2).finish(), r.msPerEval < 20 {
+            layers = Int((20 / r.msPerEval).rounded(.up))
             busyModel = runner.generate("busy\(layers)", "a8w8", "conv", 1024, 1024, 128, 128, 3, layers: layers)
         }
         if let m = busyModel {
@@ -157,7 +173,7 @@ enum Calibrate {
         print("""
 
         Results
-          ANE power      idle \(f(idlePower, "%.2f W"))   max \(f(maxPower, "%.2f W"))
+          ANE power      idle \(f(idlePower, "%.2f W"))   max \(f(maxPower, "%.2f W"))   (5x5 peak compute \(f(computePower, "%.2f W")), 3x3 stack \(f(stackPower, "%.2f W")))
           peak compute   \(f(peakTOPS, "%.1f TOPS")) (INT8)
           read bandwidth \(f(maxRead, "%.1f GB/s"))
           busy source    \(source.rawValue)

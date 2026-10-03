@@ -169,13 +169,13 @@ final class Monitor {
     /// Configurations where busy % was checked against known workloads when
     /// anemon was written; `anemon calibrate` adds the local machine.
     static let validated: [(arch: String, macOSMajor: Int)] = [("h16g", 27), ("h18g", 27)]
-    /// Built-in calibration, used when this machine has none: ANE power at the
-    /// calibration peak load (W, PP0b rail estimate, INT8 5x5 with random
-    /// inputs, median of the steady phase) and read bandwidth (GB/s, weight
-    /// bytes of an FP16 GEMV per evaluation). M4 Mac mini and M6, macOS 27.0.1,
-    /// `anemon calibrate` on 2026-10-03.
-    static let maxPowerW: [String: Double] = ["h16g": 11.5, "h18g": 10.1]
-    static let builtinReadGBs: [String: Double] = ["h16g": 64.6, "h18g": 123.8]
+    /// Built-in calibration, used when this machine has none: ANE peak power
+    /// (W, PP0b rail estimate, median of the steady phase, the larger of the
+    /// INT8 5x5 peak-compute load and the INT8 3x3 stack; random inputs) and
+    /// read bandwidth (GB/s, weight bytes of an FP16 GEMV per evaluation).
+    /// M4 Mac mini and M6, macOS 27.0.1, `anemon calibrate` on 2026-10-03.
+    static let maxPowerW: [String: Double] = ["h16g": 12.8, "h18g": 16.2]
+    static let builtinReadGBs: [String: Double] = ["h16g": 65.3, "h18g": 123.8]
     private var observedMaxPowerW = 1.0
     /// This machine's calibration, from `sudo anemon calibrate`.
     let profile: Profile?
@@ -189,9 +189,8 @@ final class Monitor {
     /// Full-scale value for the power bar: this machine's calibrated maximum,
     /// else the built-in value for a known chip, else the highest value seen.
     var powerScaleW: (watts: Double, measured: Bool) {
-        // Some loads draw more than the calibration peak (on M6 an INT8 3x3
-        // conv stack reads about 17 W against 10.1 W for the 5x5 peak), so
-        // the scale grows to the highest value seen.
+        // A load can still draw more than the calibrated peak, so the scale
+        // grows to the highest value seen.
         if let w = profile?.maxPowerW ?? Self.maxPowerW[device.architecture] {
             return (max(w, observedMaxPowerW), observedMaxPowerW <= w)
         }
