@@ -9,7 +9,7 @@ make
 sudo .build/make/anemon calibrate   # once per machine, about 2 min
 sudo .build/make/anemon             # full-screen view, q to quit
 sudo .build/make/anemon --json      # one JSON object per interval
-     .build/make/anemon --json      # without root: DRAM, interrupts and, on M6, power
+     .build/make/anemon --json      # without root: DRAM, interrupts and power (M4, M6)
 ```
 
 Options: `--interval SECONDS` (default 1), `--count N`, `--no-power`.
@@ -24,7 +24,7 @@ models and runs them on the ANE; calibration uses it for its test workloads.
 | busy % | Share of wall time the ANE was executing a task | yes |
 | tasks/s, ms/task | Completed ANE tasks and their mean duration | yes |
 | programs | Busy time and task rate per compiled model, with the process (name and PID) that submits it | yes |
-| power | ANE power | M4: yes. M6: no |
+| power | ANE power: SMC rail PP0b minus the CPU cluster on the same rail (M4, M6); as root on M4, `powermetrics` instead | no |
 | DRAM read/write | ANE traffic to memory | no |
 | interrupts | ANE interrupt rate | no |
 | state | Each engine's firmware processor: running, off or in transition; on M6, the time left until the driver powers the ANE off (5.68 s after the last inference; the next call then pays a firmware boot of about 50 ms) | no |
@@ -44,7 +44,7 @@ in use. A metric that is unavailable on a chip is reported as null, never as 0.
 |---|---|---|
 | busy %, tasks, programs | validated | busy check passed |
 | DRAM | exact | lower bound at full speed |
-| power | from `powermetrics` | estimate |
+| power | estimate from the PP0b rail; `powermetrics` as root (they agree within about 10%) | estimate from the PP0b rail |
 
 On M4, DRAM works with SIP enabled and without root.
 

@@ -90,8 +90,12 @@ struct ChipModel {
     /// weight-streaming load (69 GB/s by its weight traffic) reads as a
     /// clipped lower bound.
     var histSamplesPerS: Double?
-    /// SMC power key for the rail that feeds the ANE. On h18g, PP0b also
-    /// feeds the P-cores, whose power IOReport reports separately.
+    /// SMC power key for the rail that feeds the ANE. PP0b also feeds the
+    /// CPU cluster IOReport calls "PACC" (h16g: the P cores; h18g: the Super
+    /// and Performance cores), whose power IOReport reports separately. On
+    /// h16g, rail − cluster reads −1.25 W idle and +7.4 W under an FP16 conv
+    /// load that powermetrics puts at 9.6 W; powermetrics is used when
+    /// running as root, the rail otherwise.
     var aneRail: String?
     /// SMC rails that track DRAM traffic. On h18g, PP2b and PP4b rise by about
     /// 2.1 W while the ANE streams weights at 97 GB/s and stay below 0.1 W
@@ -110,7 +114,7 @@ struct ChipModel {
     var hostClusterName = "P cluster"
 
     static let known: [String: ChipModel] = [
-        "h16g": ChipModel(histSamplesPerS: 4408, aneRail: nil),
+        "h16g": ChipModel(histSamplesPerS: 4408, aneRail: "PP0b"),
         "h17": ChipModel(histSamplesPerS: 4770, aneRail: nil),
         "h18g": ChipModel(histSamplesPerS: 24e6 / 5400, aneRail: "PP0b", memoryRails: ["PP2b", "PP4b"],
                           powerOffS: 5.68, dramLevels: [9: (10656, 170.5)], hostClusterName: "S+P cluster"),
@@ -290,8 +294,14 @@ final class Monitor {
         let idle: Bool
         if let n = linkSamples {
             idle = n == 0 || ((s.dramReadGBs ?? 0) < 1 && (s.interruptsPerS ?? 0) < 50)
+        } else if s.busyStatus == .measured || s.busyStatus == .idle {
+            idle = s.busyPct.reduce(0, +) < 0.5
+        } else if let irq = s.interruptsPerS {
+            // No busy % (not root): the ANE is idle when it raises no
+            // interrupts and reads almost nothing from DRAM (h16g, AMC counters).
+            idle = irq < 50 && (s.dramReadGBs ?? 0) < 1
         } else {
-            idle = (s.busyStatus == .measured || s.busyStatus == .idle) && s.busyPct.reduce(0, +) < 0.5
+            idle = false
         }
         idleForS = idle ? idleForS + intervalS : 0
         if idle {
