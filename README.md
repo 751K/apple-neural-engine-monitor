@@ -17,6 +17,33 @@ Options: `--interval SECONDS` (default 1), `--count N`, `--no-power`.
 `make` builds `anemon` and `anebench`, a small tool that generates convolution
 models and runs them on the ANE; calibration uses it for its test workloads.
 
+## Reading the screen
+
+![anemon on an M6 with two processes using both engines](docs/screenshot-m6.png)
+
+*M6 (two ANEs), `sudo anemon`, two `anebench` processes running at once: an
+FP16 3×3 conv stack (3.1 ms per task) and an INT8 one (0.4 ms per task).*
+
+| Line | What it says here |
+|---|---|
+| `ANE0 busy`, `ANE1 busy` | Each engine executed tasks 99% of the time: 569 tasks/s, 1.75 ms on average. The bar turns yellow above 50% and red above 85% |
+| `State` | Both engines' firmware is running. When idle, this line counts down to the driver's power-off (5.7 s on M6) |
+| `Throttled` | Shown only while a throttle trigger is active (none here) |
+| `Power` | 16.8 W for the ANE, from the PP0b rail minus the CPU cluster on it. The bar's scale is the calibrated peak or the highest value seen |
+| `Host CPU` | The cores that call the ANE draw 1.27 W, 0.15 W above idle: the host is not the bottleneck. With many small calls this line warns that the CPU, not the ANE, spends the power |
+| `Memory` | 1.4 W on the DRAM rails, for all of memory's clients |
+| `DRAM read`, `DRAM` | ANE traffic: 26.5 GB/s read, 4.1 GB/s written; 2198 interrupts/s. The memory clock sat at its top level (F9) 88% of the time |
+| sparklines | Recent history of busy % and power; the number at the right is the scale, not the current value |
+| `programs` | Per process: share of all engines' time, tasks/s, mean task length and ANE energy per task. The FP16 model takes 88% of the ANE at 26 mJ a task; the INT8 one 11% at 3.4 mJ. A model compiled for both M6 engines runs one task on each per inference |
+
+Without root the busy, tasks and programs lines are missing (they come from
+kernel tracing); state, power, host CPU, memory and DRAM still work.
+
+**A single process rarely keeps the ANE 100% busy.** A synchronous Core ML
+call leaves about 0.3–0.4 ms between tasks for submission and completion; the
+same INT8 model alone, at 0.67 ms per call, keeps each engine about 55% busy.
+Longer tasks, batching, or several processes in parallel fill the gaps.
+
 ## What it reports
 
 | Metric | Meaning | Needs root |
@@ -153,7 +180,9 @@ busy % against the share of wall time spent in the ANE on the host:
 - `anemon calibrate` (2026-10-03, random inputs): INT8 5×5 peak load 72.6 TOPS
   at 10.1 W (PP0b rail, median of the steady phase), read bandwidth
   123.8 GB/s, busy check 95.1 / 47.7% against 100 / 50.2%. These values are
-  built in for M6 machines without a calibration. The same load with
+  built in for M6 machines without a calibration. An INT8 3×3 conv stack
+  (512 channels, 32×32, 8 layers) draws more: about 17 W, with brief ADCLK and
+  DITHER throttling (1–2% of the time). The calibration load with
   all-zero inputs reads about 5 W. Readings return to 0 within two seconds.
   Generating text with a
   4B language model (Core ML, 85% busy, 74 GB/s read) read 2.4 W, while the

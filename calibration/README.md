@@ -65,7 +65,7 @@ zeros). The same workloads on the M6, zero against random inputs:
 | Workload | Zero inputs | Random inputs |
 |---|---:|---:|
 | calibration peak (INT8 5×5, 1024 ch, 4 layers) | 80.1 TOPS, 5.1 W | 72.6 TOPS, 10.1 W |
-| INT8 3×3, 512 ch, 8 layers | 106 TOPS | 85–91 TOPS |
+| INT8 3×3, 512 ch, 8 layers | 106 TOPS | 85–91 TOPS; about 17 W (2026-10-03) |
 | FP16 3×3, 512 ch, 8 layers | 55.5 TOPS | 50.1 TOPS |
 | calibration bandwidth (FP16 1×1 GEMV) | 131.8 GB/s, 2.6 W | 132.4 GB/s, 2.7 W |
 

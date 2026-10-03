@@ -184,10 +184,12 @@ final class TUI {
             o += String(format: "power     \(esc)36m%@\(esc)0m %4.1fW\n", spark(powerHistory, max: maxW, sw), maxW)
         }
         if !s.programs.isEmpty {
-            o += "\n\(esc)1mprograms (ANE time this interval)\(esc)0m\n"
+            o += s.engines > 1
+                ? "\n\(esc)1mprograms\(esc)0m \(esc)2m(share of all \(s.engines) engines; a two-engine model runs one task on each per inference)\(esc)0m\n"
+                : "\n\(esc)1mprograms (ANE time this interval)\(esc)0m\n"
             o += "  process (pid)             handle      share   tasks/s    ms/task   mJ/task\n"
             for p in s.programs.prefix(8) {
-                let share = 100 * p.busyNs / (s.spanS * 1e9)
+                let share = s.share(p)
                 var who = p.process.map { "\($0) (\(p.pid!))" } ?? "?"
                 if who.count > 24 { who = String(who.prefix(23)) + "…" }
                 o += "  " + who.padding(toLength: 24, withPad: " ", startingAt: 0)

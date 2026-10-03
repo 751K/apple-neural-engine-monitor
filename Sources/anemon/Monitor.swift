@@ -69,6 +69,15 @@ struct Snapshot {
 }
 
 extension Snapshot {
+    /// Number of ANE engines the busy figures cover.
+    var engines: Int { max(busyPct.count, 1) }
+
+    /// A program's share of the ANE's total capacity: its busy time over the
+    /// window times the number of engines. A model compiled for both M6
+    /// engines runs one task on each per inference, so dividing by one
+    /// engine's time would read up to 200%.
+    func share(_ p: ProgramStats) -> Double { 100 * p.busyNs / (spanS * 1e9 * Double(engines)) }
+
     /// ANE energy per task for one program (mJ): the interval's ANE energy
     /// split by each program's share of ANE busy time. Includes the share of
     /// fixed ANE power, so it is the energy a task costs at this load.
@@ -180,8 +189,12 @@ final class Monitor {
     /// Full-scale value for the power bar: this machine's calibrated maximum,
     /// else the built-in value for a known chip, else the highest value seen.
     var powerScaleW: (watts: Double, measured: Bool) {
-        if let w = profile?.maxPowerW { return (w, true) }
-        if let w = Self.maxPowerW[device.architecture] { return (w, true) }
+        // Some loads draw more than the calibration peak (on M6 an INT8 3x3
+        // conv stack reads about 17 W against 10.1 W for the 5x5 peak), so
+        // the scale grows to the highest value seen.
+        if let w = profile?.maxPowerW ?? Self.maxPowerW[device.architecture] {
+            return (max(w, observedMaxPowerW), observedMaxPowerW <= w)
+        }
         return (observedMaxPowerW, false)
     }
 
