@@ -160,8 +160,10 @@ final class Monitor {
     /// Configurations where busy % was checked against known workloads when
     /// anemon was written; `anemon calibrate` adds the local machine.
     static let validated: [(arch: String, macOSMajor: Int)] = [("h16g", 27)]
-    /// Highest ANE power measured per architecture (W), for the power bar.
-    static let maxPowerW: [String: Double] = ["h16g": 3.4]
+    /// ANE power at the calibration peak load per architecture (W), for the
+    /// power bar when this machine has no calibration: h16g, PP0b rail
+    /// estimate under the INT8 5x5 peak load with random inputs.
+    static let maxPowerW: [String: Double] = ["h16g": 11.5]
     private var observedMaxPowerW = 1.0
     /// This machine's calibration, from `sudo anemon calibrate`.
     let profile: Profile?

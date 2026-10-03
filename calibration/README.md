@@ -13,7 +13,7 @@ result is recorded below; its raw captures are not part of these datasets.
 |---|---|---|
 | Is the ANE executing a task, and for how long? | kdebug firmware events `0x061b0125` (start) and `0x061b0126` (end) | yes |
 | Per-inference hardware counters | ANE PMU through `aned` (`kANEFPerformanceStatsMask`), only for the process that submits the request | no |
-| Power | `powermetrics -s cpu_power,ane_power`, if the sampler exposes ANE power; on M6 an SMC rail estimate | powermetrics: yes |
+| Power | SMC rail `PP0b` minus the CPU cluster on the same rail (M4, M6); elsewhere `powermetrics -s cpu_power,ane_power`, if it exposes ANE power | rail: no; powermetrics: yes |
 | DRAM traffic, interrupts | IOReport `AMC Stats` (M4) or `PMP / DCS BW` histograms (M6), and `Interrupt Statistics` | no |
 
 On the measured M4 / h16g system, the ANE IOReport energy reading stayed at 0
@@ -38,7 +38,8 @@ readings.
 
 anemon instead reads M6 ANE traffic from the `PMP / DCS BW` per-link
 histograms and estimates ANE power from SMC key `PP0b` (shared with the
-P-cores) minus the IOReport `PMP / Energy` P-cluster histograms. The top-level
+CPU cluster `PACC0`, which on M6 holds the Super and Performance cores) minus
+the IOReport `PMP / Energy` cluster histograms. The top-level
 README describes both methods and their check against anebench workloads.
 
 ### M6 calibration result (h18g, 32 cores, macOS 27.0.1)
@@ -261,28 +262,53 @@ TUI marks the reading as a lower bound.
 
 ### Power
 
-**M4:** the `ANE Power` line of `powermetrics`, which needs root.
+`powermetrics` reports ANE power as a model estimate from activity
+counters, and on M6 not at all. IOReport's `Energy Model / ANE` channel exists
+on M4 but reads 0, even under load. The SMC power key `PP0b`, a measured
+rail, feeds the ANE and the CPU cluster IOReport calls `PACC`:
 
-**M6:** `powermetrics` reports no ANE power, and IOReport has no ANE energy
-channel. The SMC power key `PP0b` is a rail shared by the ANE and the
-P-cores: one busy P-core adds about 6 W to it, a full INT8 ANE load about
-5.3 W, and the two add up. IOReport's `PMP / Energy` histograms give the
-P-cluster's power (`PACC0` plus `PACC0 SRAM`) in 1 W bins. anemon reports
+| Chip | Cores on `PACC` / `PP0b` | Not on it |
+|---|---|---|
+| M4 (h16g) | 4 Performance cores | 6 Efficiency cores (`EACC`) |
+| M6 (h18g) | 2 Super cores (`PCPU0–1`) and 4 Performance cores (`MCPU2–5`) | 6 Efficiency cores |
 
-    ANE power = PP0b − P-cluster power − baseline
+IOReport's `PMP / Energy` histograms give that cluster's power (`PACC0` plus
+`PACC0 SRAM`) in 1 W bins. anemon reports
 
-The baseline is the median of the last eight readings of the same difference
+    ANE power = PP0b − cluster power − baseline
+
+Measured rail − cluster (W):
+
+| Load | M4 | M6 |
+|---|---:|---:|
+| idle | −1.25 | −1.1 |
+| one spinning thread | −1.5 | −1.1 (on a Super core) |
+| two | | −1.4 (both Super cores) |
+| four | −2.7 | −2.2 (Super + 2 Performance) |
+| six | | −2.0 (Super + 4 Performance) |
+| FP16 conv on the ANE | +7.4 (`powermetrics`: 9.6 W ANE) | |
+| six threads on the Efficiency cores | | PP0b stays 0 |
+
+So the baseline holds within about 0.3 W while only the calling thread runs,
+and shifts by up to about 1 W when other threads keep the Performance cores
+busy.
+
+The baseline is the median of the last eight readings of the difference
 while the ANE is idle, learned as anemon runs; the power field stays null
 until the ANE has been idle for about five seconds. A single reading is not
 enough: when anemon starts together with other tools, the first interval can
-catch a P-core burst in only one of the two sources, and a baseline taken
+catch a CPU burst in only one of the two sources, and a baseline taken
 from it overstated ANE power by 3.5 W. Readings from the first 2 s of each
 idle spell are skipped, because the rail lags the ANE by about a second. The
-ANE counts as idle when its links are off, or read less than 1 GB/s with
-fewer than 50 interrupts/s. The SMC updates `PP0b` about once a
-second, out of step with anemon's interval, so a short CPU burst can reach
-the two sources one interval apart. Each value is the median of the last
-three intervals, which removes those dips.
+ANE counts as idle when its links are off or read less than 1 GB/s with
+fewer than 50 interrupts/s (M6), when busy % is below 0.5% (root), or, on M4
+without root, when it raises fewer than 50 interrupts/s and reads less than
+1 GB/s. The SMC updates `PP0b` about once a second, out of step with
+anemon's interval, so a short CPU burst can reach the two sources one
+interval apart. Each value is the median of the last three intervals, which
+removes those dips. `anemon calibrate` reports the median power of its steady
+peak phase, since rail readings are noisier than a single maximum should set
+the power bar's full scale.
 
 ### Firmware events after sleep
 

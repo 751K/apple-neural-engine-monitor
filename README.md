@@ -38,13 +38,23 @@ models and runs them on the ANE; calibration uses it for its test workloads.
 figure, it says whether the ANE had work, not how much of its arithmetic was
 in use. A metric that is unavailable on a chip is reported as null, never as 0.
 
+**busy % does not tell how fast the ANE runs.** macOS (CLPC) sets the ANE
+clock from its utilization and aims for about 77% busy: when the caller
+leaves gaps between requests it lowers the clock until the ANE is busy about
+77% of the time again (on M6, down to 852 MHz from 2.58 GHz, about 2.8× slower
+per task). A single process calling a model synchronously already leaves
+about 0.4 ms between tasks, so 75–80% busy is typical both at full clock and
+at the lowest one. Rising ms/task at the same busy % is the sign of a lower
+clock.
+
 ## Supported chips
 
-| | M4 | M6 (macOS 27.0.1) |
-|---|---|---|
-| busy %, tasks, programs | validated | busy check passed |
-| DRAM | exact | lower bound at full speed |
-| power | PP0b rail (within about 10% of `powermetrics`) | PP0b rail |
+| | M4 | M5 | M6 (macOS 27.0.1) |
+|---|---|---|---|
+| busy %, tasks, programs | validated | driver events only (no firmware task events); right for short tasks, the busy check failed once (see Limitations) | busy check passed |
+| DRAM | exact | histogram; lower bound above 32 GB/s | lower bound at full speed |
+| interrupts | yes | no | yes |
+| power | PP0b rail (within about 10% of `powermetrics`) | `powermetrics` (root) | PP0b rail |
 
 On M4, DRAM works with SIP enabled and without root.
 
@@ -109,9 +119,11 @@ busy % against the share of wall time spent in the ANE on the host:
 
 - Two processes sharing the ANE: 100% busy, no task events lost, each attributed to its own PID.
 - Peak INT8 throughput 35–38 TOPS across runs (theoretical 38.4).
-- Power at full INT8 load (38 TOPS) with random inputs: 12.9 W. Measured with
-  all-zero inputs: 0.66 W with tiny tasks, 2.1–2.6 W for FP16 convolutions,
-  3.4–4.1 W for INT8; the full INT8 load reads 4.1 W with zero inputs.
+- Power at full INT8 load (38 TOPS) with random inputs: 11.5 W from the PP0b
+  rail (median, `anemon calibrate`); `powermetrics` reads 12.9–13.1 W. On an
+  FP16 3×3 conv chain the rail gives about 9.5 W against 9.6 W from
+  `powermetrics`. Measured earlier with all-zero inputs (powermetrics): 0.66 W
+  with tiny tasks, 2.1–2.6 W for FP16 convolutions, 3.4–4.1 W for INT8.
 - Read bandwidth 66 GB/s, matching the weight traffic of the test GEMV.
 - A MacBook Air M4 with SIP enabled gave the same results.
 
@@ -151,8 +163,19 @@ busy % against the share of wall time spent in the ANE on the host:
 - Compute utilization is not available: the ANE's performance counters go only
   to the process that submitted the work, and even root cannot read them for
   other processes.
-- On M6 both engines have always run the same work in lockstep; separate
-  workloads on the two engines have not been tested.
+- On M6, Core ML runs a model compiled for two engines on both in lockstep;
+  a single-engine model runs on ANE0, and one compiled program is executed
+  serially within a process. Different models or processes can occupy both
+  engines (about 1.8× the throughput). anemon's per-engine busy % has not
+  been checked against separate workloads on the two engines.
+- The power estimate subtracts the CPU cluster that shares PP0b. With only
+  the cores that call the ANE busy, the error is within about 0.3 W; when
+  other threads keep the Performance cores busy too, the baseline shifts by
+  up to about 1 W (TUI note when the cluster reads above 10 W).
+- M5: one calibration ran the ANE at half speed (15 instead of 28 TOPS) and
+  read 64% busy at 100% duty. The likely cause is throttling of the fanless
+  machine after the peak load (the driver throttles by holding requests,
+  which driver events count as idle); not yet confirmed.
 
 ## Repository
 
