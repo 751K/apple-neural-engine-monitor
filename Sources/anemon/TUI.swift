@@ -128,7 +128,8 @@ final class TUI {
             // Full scale: the highest ANE power measured on this chip (M4: 3.4 W
             // at 31 TOPS INT8), or the highest value seen so far on others.
             let scale = maxMeasured ? "" : ", scale = max seen"
-            let src = s.powerSource == "smc_estimate" ? "SMC rail − S+P cores, estimate" : "powermetrics estimate"
+            let src = s.powerSource == "smc_estimate"
+                ? "SMC rail − \(monitor.chipModel?.hostClusterName ?? "P cluster"), estimate" : "powermetrics estimate"
             o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W   \(esc)2m(%@%@)\(esc)0m\n",
                         bar(p / maxW, barW), p, src, scale)
         } else if !monitor.hasPower {
@@ -139,7 +140,8 @@ final class TUI {
             o += "\(esc)2mPower      waiting for powermetrics…\(esc)0m\n"
         }
         if let h = s.hostCPUW {
-            var line = String(format: "Host CPU   %6.2f W  \(esc)2m(S+P cluster that runs the callers", h)
+            let cluster = monitor.chipModel?.hostClusterName ?? "P cluster"
+            var line = String(format: "Host CPU   %6.2f W  \(esc)2m(%@ that runs the callers", h, cluster)
             if let x = s.hostCPUExtraW { line += String(format: "; %.2f W above idle", x) }
             line += ")\(esc)0m"
             if let x = s.hostCPUExtraW, let p = s.powerW, p > 0.3, x > p {

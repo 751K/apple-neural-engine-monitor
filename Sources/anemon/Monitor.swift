@@ -105,12 +105,15 @@ struct ChipModel {
     /// (16 GB, 8 × 16-bit channels) DCS_F9 is the top level, 10656 MT/s; the
     /// device tree hides the frequencies of the lower levels.
     var dramLevels: [Int: (mts: Double, peakGBs: Double)] = [:]
+    /// Which cores the IOReport "PACC" cluster holds: on h18g the Super and
+    /// Performance cores share it; on earlier chips it is the P cores.
+    var hostClusterName = "P cluster"
 
     static let known: [String: ChipModel] = [
         "h16g": ChipModel(histSamplesPerS: 4408, aneRail: nil),
         "h17": ChipModel(histSamplesPerS: 4770, aneRail: nil),
         "h18g": ChipModel(histSamplesPerS: 24e6 / 5400, aneRail: "PP0b", memoryRails: ["PP2b", "PP4b"],
-                          powerOffS: 5.68, dramLevels: [9: (10656, 170.5)]),
+                          powerOffS: 5.68, dramLevels: [9: (10656, 170.5)], hostClusterName: "S+P cluster"),
     ]
 }
 
