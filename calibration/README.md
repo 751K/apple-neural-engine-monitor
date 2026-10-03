@@ -18,7 +18,6 @@ installing and using anemon, see the [top-level README](../README.md).
 | | M4 | M5 | M6 |
 |---|---|---|---|
 | ANE architecture | h16g, 16 cores | h17, 16 cores | h18g, 2 engines × 16 cores |
-| Machines | Mac mini (Mac16,10); MacBook Air with SIP on | MacBook Air (Mac17,3) | – |
 | macOS | 27.0.1 | 27.0.0 | 27.0.1 |
 | busy % | firmware task events | driver events | firmware task events, per engine |
 | DRAM | AMC byte counters (exact) | link histogram, clips at 32 GB/s | 4 link histograms, clip at full speed |
@@ -217,11 +216,13 @@ random inputs and saves the results to
 Peak power and read bandwidth set the full scale of the power and DRAM bars.
 Built-in values are used on machines without their own calibration:
 
-| | Peak power | Read bandwidth | Source |
-|---|---:|---:|---|
-| M4 | 12.8 W | 65.3 GB/s | Mac mini, 2026-10-03 |
-| M5 | – | 69.0 GB/s | MacBook Air, 2026-10-03 |
-| M6 | 16.2 W | 123.8 GB/s | 2026-10-03 |
+| | Peak power | Read bandwidth |
+|---|---:|---:|
+| M4 | 12.8 W | 65.3 GB/s |
+| M5 | – | 69.0 GB/s |
+| M6 | 16.2 W | 123.8 GB/s |
+
+All three come from `anemon calibrate` runs on 2026-10-03.
 
 `sudo anemon diagnose` (about 2 minutes) is for chips anemon does not know.
 It records every IOReport channel name and every SMC float key starting with
