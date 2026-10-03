@@ -7,9 +7,9 @@ usage: sudo anemon [--interval SECONDS] [--json] [--count N] [--no-power]
 Monitors the Apple Neural Engine:
   busy %     time the ANE spent executing tasks (kdebug firmware events, root)
   tasks/s    completed ANE tasks, with average task duration
-  power      ANE power estimate from the SMC rail PP0b minus the CPU cluster
-             that shares it (M4, M6; no root needed), or from powermetrics
-             when run as root on chips where it reports the ANE
+  power      ANE power from the SMC rail PP0b minus the CPU cluster that
+             shares it (M4, M6; no root needed); on other chips from
+             powermetrics (root), whose ANE figure is a model estimate
   DRAM       ANE memory traffic and interrupt rate (IOReport, no root needed)
 
 Without root, busy % and powermetrics are unavailable; some chips do not

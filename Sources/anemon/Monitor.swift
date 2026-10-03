@@ -94,8 +94,8 @@ struct ChipModel {
     /// CPU cluster IOReport calls "PACC" (h16g: the P cores; h18g: the Super
     /// and Performance cores), whose power IOReport reports separately. On
     /// h16g, rail − cluster reads −1.25 W idle and +7.4 W under an FP16 conv
-    /// load that powermetrics puts at 9.6 W; powermetrics is used when
-    /// running as root, the rail otherwise.
+    /// load that powermetrics puts at 9.6 W. powermetrics' figure is a model
+    /// estimate, so the rail is used whenever the chip has one.
     var aneRail: String?
     /// SMC rails that track DRAM traffic. On h18g, PP2b and PP4b rise by about
     /// 2.1 W while the ANE streams weights at 97 GB/s and stay below 0.1 W
@@ -197,8 +197,10 @@ final class Monitor {
             }
         }
         if usePower {
-            power = PowerMetrics(intervalMs: Int(intervalS * 1000))
+            // A measured rail beats powermetrics' modelled "ANE Power"; use
+            // powermetrics only on chips without a known rail.
             rail = chipModel?.aneRail.flatMap { SMCRail(key: $0) }
+            if rail == nil { power = PowerMetrics(intervalMs: Int(intervalS * 1000)) }
             memoryRails = (chipModel?.memoryRails ?? []).compactMap { SMCRail(key: $0) }
         }
         lastTo = anemon_mach_to_ns(anemon_mach_now()) - lagNs

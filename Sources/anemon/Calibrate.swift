@@ -82,7 +82,9 @@ enum Calibrate {
         // 1. Idle.
         _ = monitor.snapshot()
         print("[1/4] idle baseline…")
-        let idle = sample(5, skip: 1)
+        // Long enough for the SMC rail estimate to learn its idle baseline
+        // (three idle readings after 2 s of idleness).
+        let idle = sample(8, skip: 1)
         let idlePower = median(idle.compactMap(\.powerW))
 
         // 2. Peak compute: chained 5x5 INT8 convolutions (38 TOPS on M4).
@@ -93,7 +95,9 @@ enum Calibrate {
             let job = runner.start(m.dir, seconds: 14)
             let snaps = sample(13, skip: 4)
             if let r = job.finish() { peakTOPS = 2 * Double(m.macs) / (r.msPerEval / 1e3) / 1e12 }
-            maxPower = snaps.compactMap(\.powerW).max()
+            // Median of the steady phase: the rail estimate is noisier than a
+            // single reading should set the power bar's full scale.
+            maxPower = median(snaps.compactMap(\.powerW))
         }
 
         // 3. Read bandwidth: a tall FP16 GEMV streams its weights from DRAM.
