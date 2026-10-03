@@ -88,9 +88,16 @@ static const char *const anemon_throttle_names[ANEMON_THROTTLE_KINDS] = {
     "SW", "HW", "ADCLK", "DITHER", "PPT", "EXT0", "EXT1", "EXT2", "EXT3",
 };
 
-// "ANE_THROTTLE_<kind>_TRIG" (EXT triggers are "ANE_THROTTLE_EXT_TRIG<n>").
+// "ANE_THROTTLE_<kind>_TRIG" (EXT triggers are "ANE_THROTTLE_EXT_TRIG<n>";
+// M5, M6), or on M4 "ANE_ADCLK_TRIG", "ANE_DITHR_TRIG", "ANE_PPT_TRIG" and
+// "ANE_EXT_TRIG<n>". The per-source triggers ("..._SW_TRIG", M4
+// "ANE_ADSWTRG") are left out: their parent trigger covers them.
 // Returns the index into anemon_throttle_names, or -1.
 static int throttle_kind(const char *s) {
+    if (strcmp(s, "ANE_ADCLK_TRIG") == 0) return 2;
+    if (strcmp(s, "ANE_DITHR_TRIG") == 0) return 3;
+    if (strcmp(s, "ANE_PPT_TRIG") == 0) return 4;
+    if (strncmp(s, "ANE_EXT_TRIG", 12) == 0 && s[12] >= '0' && s[12] <= '3' && s[13] == 0) return 5 + (s[12] - '0');
     if (strncmp(s, "ANE_THROTTLE_", 13) != 0) return -1;
     s += 13;
     if (strncmp(s, "EXT_TRIG", 8) == 0 && s[8] >= '0' && s[8] <= '3' && s[9] == 0) return 5 + (s[8] - '0');

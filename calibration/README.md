@@ -13,7 +13,7 @@ result is recorded below; its raw captures are not part of these datasets.
 |---|---|---|
 | Is the ANE executing a task, and for how long? | kdebug firmware events `0x061b0125` (start) and `0x061b0126` (end) | yes |
 | Per-inference hardware counters | ANE PMU through `aned` (`kANEFPerformanceStatsMask`), only for the process that submits the request | no |
-| Power | SMC rail `PP0b` minus the CPU cluster on the same rail (M4, M6); elsewhere `powermetrics -s cpu_power,ane_power`, if it exposes ANE power | rail: no; powermetrics: yes |
+| Power | SMC rail `PP0b` minus the CPU cluster on the same rail (M4, M5, M6); elsewhere `powermetrics -s cpu_power,ane_power`, if it exposes ANE power | rail: no; powermetrics: yes |
 | DRAM traffic, interrupts | IOReport `AMC Stats` (M4) or `PMP / DCS BW` histograms (M6), and `Interrupt Statistics` | no |
 
 On the measured M4 / h16g system, the ANE IOReport energy reading stayed at 0
@@ -268,11 +268,15 @@ busy % against the share of wall time spent in the ANE on the host:
 - After the Mac has slept, firmware task events stop until the next reboot and
   anemon falls back to driver events: busy % stays within about 1.5 points,
   but on M6 tasks/s doubles and the two engines can no longer be told apart.
-- M5: no firmware task events, no interrupt counts; DRAM comes from link
-  histograms that clip at 32 GB/s. One calibration ran the ANE at half speed
-  (15 instead of 28 TOPS) and read 64% busy at 100% duty. The likely cause is
-  throttling of the fanless machine after the peak load (the driver throttles
-  by holding requests, which driver events count as idle); not confirmed.
+- M5: no firmware task events, no interrupt counts; busy % comes from driver
+  events and read 99% and 50–54% at 100% and 52% duty (`anemon diagnose`,
+  macOS 27.0.0). DRAM comes from link histograms that clip at 32 GB/s (an FP16
+  GEMV reading 71 GB/s of weights shows 29.5 GB/s); the AMC byte counters are
+  listed but return nothing. Power: PP0b rises 6.2 W under an ANE load with
+  the Super-core cluster flat, as on M4. An earlier calibration ran the ANE
+  at half speed and read 64% busy at 100% duty; the diagnose run, with the
+  same loads, did not reproduce it (30.9–38.2 TOPS, ANE throttle triggers
+  active below 0.5% of the time under full load).
 
 ## How anemon reads each metric
 

@@ -34,9 +34,9 @@ installing, run `.build/make/anemon` from the repository.
 | `ANE busy` | Share of time each engine was executing a task; tasks/s and mean ms/task | yes |
 | `State` | Each engine running or off (JSON also gives the countdown to power-off) | no |
 | `Throttled` | Shown while a throttle trigger is active | no |
-| `Power` | ANE power from the SMC rail PP0b minus the CPU cluster on the same rail (M4, M6) | no |
+| `Power` | ANE power from the SMC rail PP0b minus the CPU cluster on the same rail (M4, M5, M6) | no |
 | `Host CPU` | Power of the cores that call the ANE; warns when they draw more than the ANE (many small calls) | no |
-| `Memory` | M6: power of the DRAM rails, for all of memory's clients | no |
+| `Memory` | M5, M6: power of the DRAM rails, for all of memory's clients | no |
 | `DRAM` | ANE read/write traffic and interrupts (JSON also gives the memory clock level) | no |
 | `programs` | Per process: share of the ANE, tasks/s, ms/task and energy per task (mJ) | yes |
 
@@ -55,7 +55,7 @@ reboot and is less precise; reboot first on a benchmark machine.
 |---|---|---|---|
 | busy %, programs | ✓ | driver events only | ✓ (both engines) |
 | DRAM | exact | lower bound above 32 GB/s | lower bound at full speed |
-| power | ✓ | `powermetrics` (root) | ✓ |
+| power | ✓ | ✓ | ✓ |
 
 Tested on macOS 27.0.1. These are private macOS interfaces and may change
 between releases. On other chips, `sudo anemon calibrate` checks busy %;

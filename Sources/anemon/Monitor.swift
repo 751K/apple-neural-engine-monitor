@@ -108,7 +108,7 @@ struct ChipModel {
     var aneRail: String?
     /// SMC rails that track DRAM traffic. On h18g, PP2b and PP4b rise by about
     /// 2.1 W while the ANE streams weights at 97 GB/s and stay below 0.1 W
-    /// under a compute-bound load (their sum follows PZD1).
+    /// under a compute-bound load (their sum follows PZD1); h17 is similar.
     var memoryRails: [String] = []
     /// Seconds after the last inference until the driver powers the ANE off:
     /// 5.68 s on h18g (kernel log `HWDevicePowerOffTimerTimeOut`, IOP state
@@ -124,7 +124,12 @@ struct ChipModel {
 
     static let known: [String: ChipModel] = [
         "h16g": ChipModel(histSamplesPerS: 4408, aneRail: "PP0b"),
-        "h17": ChipModel(histSamplesPerS: 4770, aneRail: nil),
+        // h17 (M5, macOS 27.0.0, `anemon diagnose`): PP0b rises 6.2 W under
+        // an ANE load with the cluster flat, and 11 W with only the Super
+        // cores (IOReport "PACC") busy; PP2b and PP4b rise 3 W while the ANE
+        // streams weights at 71 GB/s.
+        "h17": ChipModel(histSamplesPerS: 4770, aneRail: "PP0b", memoryRails: ["PP2b", "PP4b"],
+                         hostClusterName: "S cluster"),
         "h18g": ChipModel(histSamplesPerS: 24e6 / 5400, aneRail: "PP0b", memoryRails: ["PP2b", "PP4b"],
                           powerOffS: 5.68, dramLevels: [9: (10656, 170.5)], hostClusterName: "S+P cluster"),
     ]
@@ -168,7 +173,9 @@ final class Monitor {
 
     /// Configurations where busy % was checked against known workloads when
     /// anemon was written; `anemon calibrate` adds the local machine.
-    static let validated: [(arch: String, macOSMajor: Int)] = [("h16g", 27), ("h18g", 27)]
+    /// h17 (M5) uses driver events (no firmware task events) and read 99% and
+    /// 50-54% busy at 100% and 52% duty.
+    static let validated: [(arch: String, macOSMajor: Int)] = [("h16g", 27), ("h17", 27), ("h18g", 27)]
     /// Built-in calibration, used when this machine has none: ANE peak power
     /// (W, PP0b rail estimate, median of the steady phase, the larger of the
     /// INT8 5x5 peak-compute load and the INT8 3x3 stack; random inputs) and
