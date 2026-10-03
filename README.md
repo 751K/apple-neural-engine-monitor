@@ -94,8 +94,8 @@ DRAM bars; M4 and M6 have built-in values for machines without their own.
 - Compute utilization is not available: the ANE's performance counters go
   only to the process that submitted the work.
 
-Details — how each metric is read, JSON fields, validation data, and notes on
-M6 and M5 — are in [`calibration/README.md`](calibration/README.md).
+How each metric is read, how it was validated on each chip, and the JSON
+fields are in [`calibration/README.md`](calibration/README.md).
 
 ## License
 
