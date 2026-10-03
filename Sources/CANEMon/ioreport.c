@@ -9,6 +9,9 @@
 //   PMP / DCS BW                per-link ANE bandwidth histograms ("ANE0 L0 RD"; M6)
 //   PMP / Energy                CPU cluster power histograms ("PACC0", "PACC0 SRAM")
 //   Interrupt Statistics        ANE interrupt counts
+//   SoC Stats / Events          DRAM frequency levels ("DCS_F<n>") and ANE
+//                               throttle triggers ("ANE_THROTTLE_*_TRIG")
+//   ANE, ANE1 / IOP State       state of each engine's firmware processor
 
 #include "canemon.h"
 
@@ -81,6 +84,39 @@ static int is_pcluster(const char *s) {
     return *s == 0 || strcmp(s, " SRAM") == 0;
 }
 
+static const char *const anemon_throttle_names[ANEMON_THROTTLE_KINDS] = {
+    "SW", "HW", "ADCLK", "DITHER", "PPT", "EXT0", "EXT1", "EXT2", "EXT3",
+};
+
+// "ANE_THROTTLE_<kind>_TRIG" (EXT triggers are "ANE_THROTTLE_EXT_TRIG<n>").
+// Returns the index into anemon_throttle_names, or -1.
+static int throttle_kind(const char *s) {
+    if (strncmp(s, "ANE_THROTTLE_", 13) != 0) return -1;
+    s += 13;
+    if (strncmp(s, "EXT_TRIG", 8) == 0 && s[8] >= '0' && s[8] <= '3' && s[9] == 0) return 5 + (s[8] - '0');
+    for (int i = 0; i < 5; i++) {
+        size_t n = strlen(anemon_throttle_names[i]);
+        if (strncmp(s, anemon_throttle_names[i], n) == 0 && strcmp(s + n, "_TRIG") == 0) return i;
+    }
+    return -1;
+}
+
+// "DCS_F<n>": returns n, or -1.
+static int dcs_level(const char *s) {
+    if (strncmp(s, "DCS_F", 5) != 0 || s[5] < '0' || s[5] > '9') return -1;
+    char *end;
+    long n = strtol(s + 5, &end, 10);
+    return *end == 0 && n < ANEMON_MAX_DCS_LEVELS ? (int)n : -1;
+}
+
+// IOP State groups: "ANE" is engine 0, "ANE<n>" engine n. Returns -1 otherwise.
+static int iop_engine(const char *grp) {
+    if (strcmp(grp, "ANE") == 0) return 0;
+    if (strncmp(grp, "ANE", 3) != 0 || grp[3] < '1' || grp[3] > '9' || grp[4] != 0) return -1;
+    int n = grp[3] - '0';
+    return n < ANEMON_MAX_ENGINES ? n : -1;
+}
+
 // Interrupt subgroups: "ane 2" (M4) or "ane1 2" (second engine).
 static int is_ane_irq(const char *s) {
     if (strncasecmp(s, "ane", 3) != 0) return 0;
@@ -98,6 +134,7 @@ typedef int (*keep_fn)(const char *name);
 static int keep_ane_dcs(const char *n) { return is_ane_dcs(n); }
 static int keep_ane_link(const char *n) { return ane_link_dir(n) != 0; }
 static int keep_pcluster(const char *n) { return is_pcluster(n); }
+static int keep_soc_events(const char *n) { return dcs_level(n) >= 0 || throttle_kind(n) >= 0; }
 
 // Copies a group's channels, keeping those accepted by keep (NULL = all),
 // and returns them only if they can be subscribed on their own.
@@ -165,6 +202,9 @@ anemon_ior *anemon_ior_open(void) {
         usable(r, CFSTR("PMP"), CFSTR("DCS BW"), r->dump_channels ? NULL : keep_ane_link),
         usable(r, CFSTR("PMP"), CFSTR("Energy"), keep_pcluster),
         usable(r, CFSTR("Interrupt Statistics (by index)"), NULL, NULL),
+        usable(r, CFSTR("SoC Stats"), CFSTR("Events"), keep_soc_events),
+        usable(r, CFSTR("ANE"), CFSTR("IOP State"), NULL),
+        usable(r, CFSTR("ANE1"), CFSTR("IOP State"), NULL),
     };
     CFMutableDictionaryRef chans = NULL;
     for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) {
@@ -292,6 +332,39 @@ int anemon_ior_sample(anemon_ior *r, anemon_ior_values *v) {
                 cnt += (double)res;
             }
             if (cnt > 0) v->pcluster_w += sum / cnt;
+        } else if (strcmp(grp, "SoC Stats") == 0 && strcmp(sub, "Events") == 0 && r->format(ch) == 2) {
+            // Two states, INACT and ACT, in 24 MHz ticks.
+            int lvl = dcs_level(name), kind = throttle_kind(name);
+            if (lvl < 0 && kind < 0) continue;
+            uint64_t act = 0, total = 0;
+            char st[32];
+            for (int32_t j = 0; j < r->state_count(ch); j++) {
+                int64_t res = r->residency(ch, j);
+                if (res <= 0) continue;
+                total += (uint64_t)res;
+                cfstr(r->state_name(ch, j), st, sizeof st);
+                if (strcmp(st, "ACT") == 0) act += (uint64_t)res;
+            }
+            if (lvl >= 0) {
+                v->found |= ANEMON_IOR_DCS_LEVELS;
+                v->dcs_level_ticks[lvl] += act;
+            } else {
+                v->found |= ANEMON_IOR_THROTTLE;
+                v->throttle_ticks[kind] += act;
+                if (total > v->throttle_span_ticks) v->throttle_span_ticks = total;
+            }
+        } else if (strcmp(sub, "IOP State") == 0 && iop_engine(grp) >= 0 && r->format(ch) == 2) {
+            int e = iop_engine(grp);
+            v->found |= ANEMON_IOR_IOP;
+            if (e + 1 > v->iop_engines) v->iop_engines = e + 1;
+            char st[32];
+            for (int32_t j = 0; j < r->state_count(ch); j++) {
+                int64_t res = r->residency(ch, j);
+                if (res <= 0) continue;
+                cfstr(r->state_name(ch, j), st, sizeof st);
+                int k = strcmp(st, "Off") == 0 ? ANEMON_IOP_OFF : strcmp(st, "Running") == 0 ? ANEMON_IOP_RUNNING : ANEMON_IOP_OTHER;
+                v->iop_ticks[e][k] += (uint64_t)res;
+            }
         } else if (strncmp(grp, "Interrupt Statistics", 20) == 0 && is_ane_irq(sub) &&
                    strstr(name, "First Level Interrupt Handler Count")) {
             v->found |= ANEMON_IOR_INTERRUPTS;

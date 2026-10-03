@@ -27,6 +27,12 @@ models and runs them on the ANE; calibration uses it for its test workloads.
 | power | ANE power | M4: yes. M6: no |
 | DRAM read/write | ANE traffic to memory | no |
 | interrupts | ANE interrupt rate | no |
+| state | Each engine's firmware processor: running, off or in transition; on M6, the time left until the driver powers the ANE off (5.68 s after the last inference; the next call then pays a firmware boot of about 50 ms) | no |
+| throttled | Share of the interval with an ANE throttle trigger active, and which (SW, HW, ADCLK, DITHER, PPT, EXT0–3) | no |
+| host CPU | Power of the CPU cluster that runs the ANE's callers (IOReport `PACC`; on M6 the 2 Super and 4 Performance cores), and how far it is above its idle level. With many small calls the host, not the ANE, draws most of the power | no |
+| memory | M6: power of the SMC rails that follow DRAM traffic (PP2b + PP4b), for all clients of memory | no |
+| DRAM level | Memory clock level (`DCS_F<n>`) with the most residency; on M6 the top level F9 is 10656 MT/s, 170.5 GB/s peak | no |
+| mJ/task | Per program: ANE energy per task, splitting the interval's ANE energy by each program's busy time | yes (needs busy %) and power |
 
 **busy % is time occupancy, not compute utilization.** Like the GPU "active"
 figure, it says whether the ANE had work, not how much of its arithmetic was
@@ -67,6 +73,13 @@ Each line is one interval. Besides the metrics above:
 | `slept_since_boot_s` | Time the Mac has slept since boot |
 | `validated` | The busy check has passed for this chip and macOS major version |
 | `calibrated` | A calibration profile exists for this machine |
+| `host_cpu_power_w`, `host_cpu_extra_w` | CPU cluster power and its excess over idle |
+| `memory_power_w` | Memory rail power (M6) |
+| `ane_state` | Per engine: `running`, `off` or `transition` |
+| `ane_idle_s`, `ane_power_off_in_s` | Seconds since the last ANE activity; seconds until power-off (M6) |
+| `ane_throttle_pct`, `ane_throttle_kinds` | Throttled share of the interval and the active triggers |
+| `dram_level`, `dram_level_pct`, `dram_peak_gbs` | Dominant memory clock level, its share, and its peak bandwidth where known |
+| `programs[].energy_mj_per_task` | ANE energy per task for that program |
 
 ## Calibration
 

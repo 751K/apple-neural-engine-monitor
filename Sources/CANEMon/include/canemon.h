@@ -74,7 +74,19 @@ enum {
     ANEMON_IOR_INTERRUPTS = 2,  // "Interrupt Statistics" ane channels
     ANEMON_IOR_DRAM_HIST = 4,   // PMP "DCS BW" per-link ANE bandwidth histograms (M6)
     ANEMON_IOR_PCLUSTER = 8,    // PMP "Energy" P-cluster power histograms
+    ANEMON_IOR_DCS_LEVELS = 16, // SoC Stats "DCS_F<n>" DRAM frequency level residency
+    ANEMON_IOR_THROTTLE = 32,   // SoC Stats "ANE_THROTTLE_*_TRIG" residency
+    ANEMON_IOR_IOP = 64,        // "ANE" / "ANE1" IOP State residency
 };
+
+// Throttle triggers in anemon_ior_values.throttle_ticks, in this order:
+// SW, HW, ADCLK, DITHER, PPT, EXT0, EXT1, EXT2, EXT3.
+#define ANEMON_THROTTLE_KINDS 9
+
+// IOP (ANE firmware processor) states, summarised.
+enum { ANEMON_IOP_OFF = 0, ANEMON_IOP_RUNNING = 1, ANEMON_IOP_OTHER = 2, ANEMON_IOP_KINDS = 3 };
+#define ANEMON_MAX_ENGINES 4
+#define ANEMON_MAX_DCS_LEVELS 16
 
 // Deltas since the previous sample.
 typedef struct {
@@ -90,6 +102,15 @@ typedef struct {
     uint64_t hist_rd_top;       // read samples in the highest bin (clipped)
     int hist_links;             // read links seen
     double pcluster_w;          // mean P-cluster power incl. SRAM, all clusters
+    // DRAM frequency levels: 24 MHz ticks spent at each "DCS_F<n>" level.
+    uint64_t dcs_level_ticks[ANEMON_MAX_DCS_LEVELS];
+    // ANE throttling: ticks each trigger was active, and the interval length
+    // in ticks (active + inactive of one trigger).
+    uint64_t throttle_ticks[ANEMON_THROTTLE_KINDS];
+    uint64_t throttle_span_ticks;
+    // IOP state per engine ("ANE" = 0, "ANE1" = 1, ...): ticks off, running, other.
+    uint64_t iop_ticks[ANEMON_MAX_ENGINES][ANEMON_IOP_KINDS];
+    int iop_engines;            // highest engine index seen + 1
 } anemon_ior_values;
 
 // Takes a sample and writes deltas since the previous call into *v.

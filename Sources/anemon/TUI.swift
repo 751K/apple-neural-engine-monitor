@@ -109,11 +109,26 @@ final class TUI {
                 }
             }
         }
+        if !s.aneState.isEmpty || s.anePowerOffInS != nil {
+            var st = s.aneState.enumerated().map { (i, v) in
+                let col = v == "running" ? "\(esc)32m" : v == "off" ? "\(esc)2m" : "\(esc)33m"
+                return "\(col)\(s.aneState.count > 1 ? "ANE\(i) " : "")\(v)\(esc)0m"
+            }.joined(separator: " · ")
+            if let left = s.anePowerOffInS, let idle = s.aneIdleS {
+                st += String(format: "   \(esc)2midle %.1f s, powers off in %.1f s (first call after that ≈ 50 ms slower)\(esc)0m", idle, left)
+            } else if s.aneState.allSatisfy({ $0 == "off" }) && !s.aneState.isEmpty {
+                st += "   \(esc)2mpowered off: the next call boots the firmware first\(esc)0m"
+            }
+            o += "State      \(st)\n"
+        }
+        if let t = s.throttlePct, t > 0 {
+            o += String(format: "\(esc)31mThrottled  %.0f%% of the interval (%@)\(esc)0m\n", t, s.throttleKinds.joined(separator: ", "))
+        }
         if let p = s.powerW {
             // Full scale: the highest ANE power measured on this chip (M4: 3.4 W
             // at 31 TOPS INT8), or the highest value seen so far on others.
             let scale = maxMeasured ? "" : ", scale = max seen"
-            let src = s.powerSource == "smc_estimate" ? "SMC rail − P-cores, estimate" : "powermetrics estimate"
+            let src = s.powerSource == "smc_estimate" ? "SMC rail − S+P cores, estimate" : "powermetrics estimate"
             o += String(format: "Power      \(esc)36m%@\(esc)0m %6.2f W   \(esc)2m(%@%@)\(esc)0m\n",
                         bar(p / maxW, barW), p, src, scale)
         } else if !monitor.hasPower {
@@ -122,6 +137,21 @@ final class TUI {
             o += "\(esc)2mPower      waiting for an idle ANE interval to set the baseline…\(esc)0m\n"
         } else {
             o += "\(esc)2mPower      waiting for powermetrics…\(esc)0m\n"
+        }
+        if let h = s.hostCPUW {
+            var line = String(format: "Host CPU   %6.2f W  \(esc)2m(S+P cluster that runs the callers", h)
+            if let x = s.hostCPUExtraW { line += String(format: "; %.2f W above idle", x) }
+            line += ")\(esc)0m"
+            if let x = s.hostCPUExtraW, let p = s.powerW, p > 0.3, x > p {
+                line += "\n\(esc)33m           the host spends more power than the ANE: many small calls? batch them or use a larger model\(esc)0m"
+            }
+            if h > 10, s.powerW != nil {
+                line += "\n\(esc)2m           P cores are busy too: the ANE power estimate is less accurate (about ±1 W)\(esc)0m"
+            }
+            o += line + "\n"
+        }
+        if let m = s.memoryPowerW {
+            o += String(format: "Memory     %6.2f W  \(esc)2m(DRAM rails, all clients)\(esc)0m\n", m)
         }
         if let r = s.dramReadGBs, let maxR = monitor.maxReadGBs {
             o += String(format: "DRAM read  \(esc)35m%@\(esc)0m %6.1f GB/s  \(esc)2m(scale = calibrated %.0f GB/s)\(esc)0m\n",
@@ -134,6 +164,15 @@ final class TUI {
         }
         let irq = s.interruptsPerS.map { String(format: "interrupts %7.0f/s", $0) } ?? "\(esc)2minterrupts n/a\(esc)0m"
         o += "DRAM       \(dram)   \(irq)\n"
+        if let lvl = s.dramLevel, let pct = s.dramLevelPct {
+            var line = String(format: "\(esc)2m           memory clock at %@ %.0f%% of the interval", lvl, pct)
+            if let peak = s.dramPeakGBs {
+                line += String(format: " (top level, peak %.1f GB/s", peak)
+                if let r = s.dramReadGBs { line += String(format: "; ANE traffic %.0f%% of it", 100 * (r + (s.dramWriteGBs ?? 0)) / peak) }
+                line += ")"
+            }
+            o += line + "\(esc)0m\n"
+        }
         o += "\n"
         let sw = max(10, w - 14)
         for (i, h) in history.enumerated() {
@@ -144,14 +183,15 @@ final class TUI {
         }
         if !s.programs.isEmpty {
             o += "\n\(esc)1mprograms (ANE time this interval)\(esc)0m\n"
-            o += "  process (pid)             handle      share   tasks/s    ms/task\n"
+            o += "  process (pid)             handle      share   tasks/s    ms/task   mJ/task\n"
             for p in s.programs.prefix(8) {
                 let share = 100 * p.busyNs / (s.intervalS * 1e9)
                 var who = p.process.map { "\($0) (\(p.pid!))" } ?? "?"
                 if who.count > 24 { who = String(who.prefix(23)) + "…" }
                 o += "  " + who.padding(toLength: 24, withPad: " ", startingAt: 0)
-                o += String(format: "  0x%-8llx %7.1f%% %9.0f %10.3f\n", p.handle, share,
+                o += String(format: "  0x%-8llx %7.1f%% %9.0f %10.3f", p.handle, share,
                             Double(p.tasks) / s.intervalS, p.busyNs / Double(max(p.tasks, 1)) / 1e6)
+                o += s.energyPerTaskMJ(p).map { String(format: " %9.3f\n", $0) } ?? "         –\n"
             }
         }
         if s.traceErrors > 0 { o += "\(esc)31mkdebug read errors: \(s.traceErrors)\(esc)0m\n" }

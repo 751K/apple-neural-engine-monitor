@@ -8,7 +8,7 @@ Monitors the Apple Neural Engine:
   busy %     time the ANE spent executing tasks (kdebug firmware events, root)
   tasks/s    completed ANE tasks, with average task duration
   power      ANE power estimate from powermetrics (root), or on M6 (h18g) from
-             an SMC rail minus P-core power (no root needed)
+             an SMC rail minus S+P-core power (no root needed)
   DRAM       ANE memory traffic and interrupt rate (IOReport, no root needed)
 
 Without root, busy % and powermetrics are unavailable; some chips do not
@@ -80,7 +80,8 @@ func jsonLine(_ s: Snapshot) -> String {
         d["trace_restarts"] = s.traceRestarts
         d["programs"] = s.programs.prefix(16).map {
             ["handle": String(format: "0x%llx", $0.handle), "pid": $0.pid.map { Int($0) } as Any? ?? NSNull(),
-             "process": $0.process ?? NSNull(), "tasks": $0.tasks, "busy_ms": $0.busyNs / 1e6] as [String: Any]
+             "process": $0.process ?? NSNull(), "tasks": $0.tasks, "busy_ms": $0.busyNs / 1e6,
+             "energy_mj_per_task": s.energyPerTaskMJ($0) ?? NSNull()] as [String: Any]
         }
     } else {
         d["ane_busy_pct"] = NSNull()
@@ -100,6 +101,17 @@ func jsonLine(_ s: Snapshot) -> String {
         d["debug_trace_late_busy_ms"] = s.traceLateBusyMs
     }
     d["ane_interrupts_per_s"] = s.interruptsPerS ?? NSNull()
+    d["host_cpu_power_w"] = s.hostCPUW ?? NSNull()
+    d["host_cpu_extra_w"] = s.hostCPUExtraW ?? NSNull()
+    d["memory_power_w"] = s.memoryPowerW ?? NSNull()
+    d["ane_state"] = s.aneState.isEmpty ? NSNull() : s.aneState as Any
+    d["ane_idle_s"] = s.aneIdleS ?? NSNull()
+    d["ane_power_off_in_s"] = s.anePowerOffInS ?? NSNull()
+    d["ane_throttle_pct"] = s.throttlePct ?? NSNull()
+    d["ane_throttle_kinds"] = s.throttleKinds
+    d["dram_level"] = s.dramLevel ?? NSNull()
+    d["dram_level_pct"] = s.dramLevelPct ?? NSNull()
+    d["dram_peak_gbs"] = s.dramPeakGBs ?? NSNull()
     let data = try! JSONSerialization.data(withJSONObject: d, options: [.sortedKeys])
     return String(decoding: data, as: UTF8.self)
 }

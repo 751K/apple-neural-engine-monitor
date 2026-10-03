@@ -28,6 +28,29 @@ struct Snapshot {
     var dramClippedPct: Double?         // histogram samples in the top bin
     var railW: Double?                  // raw inputs of the SMC power estimate
     var pclusterW: Double?
+    /// CPU cluster that runs the ANE's callers (IOReport "PACC": on M6 the
+    /// 2 Super and 4 Performance cores), in W. High while the ANE is busy with
+    /// small, frequent calls: the host side, not the ANE, then draws most power.
+    var hostCPUW: Double?
+    /// hostCPUW minus its median while the ANE is idle.
+    var hostCPUExtraW: Double?
+    /// SMC rails that rise with DRAM traffic (M6: PP2b + PP4b). Includes
+    /// every client of memory, not only the ANE.
+    var memoryPowerW: Double?
+    /// Per engine: "off", "running" or "transition" (the IOP's dominant state).
+    var aneState: [String] = []
+    /// Seconds since the ANE last showed activity (tasks or interrupts).
+    var aneIdleS: Double?
+    /// Seconds until the driver's power-off timer fires, if known for this chip.
+    var anePowerOffInS: Double?
+    /// Share of the interval with any ANE throttle trigger active, and which.
+    var throttlePct: Double?
+    var throttleKinds: [String] = []
+    /// DRAM frequency level with the most residency ("F9"), and its share.
+    var dramLevel: String?
+    var dramLevelPct: Double?
+    /// Peak DRAM bandwidth at that level, where the level's speed is known.
+    var dramPeakGBs: Double?
     var interruptsPerS: Double?
     var traceErrors = 0
     var traceEventsPerS = 0.0
@@ -40,6 +63,18 @@ struct Snapshot {
     var traceMaxLateMs = 0.0
     var traceLateTasks = 0
     var traceLateBusyMs = 0.0
+}
+
+extension Snapshot {
+    /// ANE energy per task for one program (mJ): the interval's ANE energy
+    /// split by each program's share of ANE busy time. Includes the share of
+    /// fixed ANE power, so it is the energy a task costs at this load.
+    func energyPerTaskMJ(_ p: ProgramStats) -> Double? {
+        guard let w = powerW, w > 0, p.tasks > 0 else { return nil }
+        let busy = programs.reduce(0) { $0 + $1.busyNs }
+        guard busy > 0 else { return nil }
+        return w * intervalS * (p.busyNs / busy) / Double(p.tasks) * 1000
+    }
 }
 
 /// Per-architecture knowledge for sources that need it.
@@ -55,11 +90,24 @@ struct ChipModel {
     /// SMC power key for the rail that feeds the ANE. On h18g, PP0b also
     /// feeds the P-cores, whose power IOReport reports separately.
     var aneRail: String?
+    /// SMC rails that track DRAM traffic. On h18g, PP2b and PP4b rise by about
+    /// 2.1 W while the ANE streams weights at 97 GB/s and stay below 0.1 W
+    /// under a compute-bound load (their sum follows PZD1).
+    var memoryRails: [String] = []
+    /// Seconds after the last inference until the driver powers the ANE off:
+    /// 5.68 s on h18g (kernel log `HWDevicePowerOffTimerTimeOut`, IOP state
+    /// traces). The first call after power-off pays a firmware boot of about 50 ms.
+    var powerOffS: Double?
+    /// DRAM levels whose speed is known: level → (MT/s, peak GB/s). On h18g
+    /// (16 GB, 8 × 16-bit channels) DCS_F9 is the top level, 10656 MT/s; the
+    /// device tree hides the frequencies of the lower levels.
+    var dramLevels: [Int: (mts: Double, peakGBs: Double)] = [:]
 
     static let known: [String: ChipModel] = [
         "h16g": ChipModel(histSamplesPerS: 4408, aneRail: nil),
         "h17": ChipModel(histSamplesPerS: 4770, aneRail: nil),
-        "h18g": ChipModel(histSamplesPerS: 24e6 / 5400, aneRail: "PP0b"),
+        "h18g": ChipModel(histSamplesPerS: 24e6 / 5400, aneRail: "PP0b", memoryRails: ["PP2b", "PP4b"],
+                          powerOffS: 5.68, dramLevels: [9: (10656, 170.5)]),
     ]
 }
 
@@ -70,6 +118,12 @@ final class Monitor {
     private(set) var traceError: String?
     private var power: PowerMetrics?
     private var rail: SMCRail?
+    private var memoryRails: [SMCRail] = []
+    /// Recent CPU cluster readings while the ANE is idle; their median is the
+    /// host's own baseline.
+    private var idleHostW: [Double] = []
+    /// When the ANE last showed activity (ns, mach time).
+    private var lastActiveNs: Double?
     /// rail - P-cluster while the ANE is idle: the rest of the rail's load
     /// plus the bias of the 1 W-wide cluster histogram bins.
     private var railOffsetW: Double?
@@ -135,6 +189,7 @@ final class Monitor {
         if usePower {
             power = PowerMetrics(intervalMs: Int(intervalS * 1000))
             rail = chipModel?.aneRail.flatMap { SMCRail(key: $0) }
+            memoryRails = (chipModel?.memoryRails ?? []).compactMap { SMCRail(key: $0) }
         }
         lastTo = anemon_mach_to_ns(anemon_mach_now()) - lagNs
     }
@@ -190,10 +245,17 @@ final class Monitor {
             }
             if c.found & Int32(ANEMON_IOR_INTERRUPTS) != 0 { s.interruptsPerS = Double(c.interrupts) / dt }
             if c.found & Int32(ANEMON_IOR_PCLUSTER) != 0 { pclusterW = c.pcluster_w }
+            readStates(&s, c)
         }
         classify(&s)
         s.railW = railW
         s.pclusterW = pclusterW
+        s.hostCPUW = pclusterW
+        if !memoryRails.isEmpty {
+            let w = memoryRails.compactMap { $0.takeMean() }
+            if w.count == memoryRails.count { s.memoryPowerW = w.reduce(0, +) }
+        }
+        trackActivity(&s, nowNs: nowNs)
         if s.powerW == nil, let railW, let pclusterW {
             estimatePower(&s, raw: railW - pclusterW, linkSamples: linkSamples)
         }
@@ -242,6 +304,63 @@ final class Monitor {
         if s.powerW != nil { s.powerSource = "smc_estimate" }
     }
 
+    /// ANE throttle triggers, in the order of anemon_ior_values.throttle_ticks.
+    static let throttleNames = ["SW", "HW", "ADCLK", "DITHER", "PPT", "EXT0", "EXT1", "EXT2", "EXT3"]
+
+    /// IOP state per engine, ANE throttling and the DRAM level, from IOReport.
+    private func readStates(_ s: inout Snapshot, _ c: anemon_ior_values) {
+        if c.found & Int32(ANEMON_IOR_IOP) != 0 {
+            var t = c.iop_ticks
+            let a: [UInt64] = withUnsafeBytes(of: &t) { Array($0.bindMemory(to: UInt64.self)) }
+            let k = Int(ANEMON_IOP_KINDS)
+            var states: [String] = []
+            for e in 0..<Int(c.iop_engines) {
+                let off = a[e * k + Int(ANEMON_IOP_OFF)]
+                let run = a[e * k + Int(ANEMON_IOP_RUNNING)]
+                let other = a[e * k + Int(ANEMON_IOP_OTHER)]
+                states.append(run >= off && run >= other ? "running" : off >= other ? "off" : "transition")
+            }
+            s.aneState = states
+        }
+        if c.found & Int32(ANEMON_IOR_THROTTLE) != 0, c.throttle_span_ticks > 0 {
+            var t = c.throttle_ticks
+            let ticks = withUnsafeBytes(of: &t) { Array($0.bindMemory(to: UInt64.self)) }
+            let maxTicks = ticks.max() ?? 0
+            s.throttlePct = 100 * Double(maxTicks) / Double(c.throttle_span_ticks)
+            s.throttleKinds = ticks.indices.filter { ticks[$0] > 0 && $0 < Self.throttleNames.count }.map { Self.throttleNames[$0] }
+        }
+        if c.found & Int32(ANEMON_IOR_DCS_LEVELS) != 0 {
+            var t = c.dcs_level_ticks
+            let ticks = withUnsafeBytes(of: &t) { Array($0.bindMemory(to: UInt64.self)) }
+            let total = ticks.reduce(0, +)
+            if total > 0, let top = ticks.indices.max(by: { ticks[$0] < ticks[$1] }) {
+                s.dramLevel = "F\(top)"
+                s.dramLevelPct = 100 * Double(ticks[top]) / Double(total)
+                s.dramPeakGBs = chipModel?.dramLevels[top]?.peakGBs
+            }
+        }
+    }
+
+    /// Time since the ANE last worked, the power-off countdown, and the
+    /// host CPU's power above its own idle level.
+    private func trackActivity(_ s: inout Snapshot, nowNs: Double) {
+        let active = s.busyPct.reduce(0, +) > 0.5 || (s.interruptsPerS ?? 0) > 20
+        if active { lastActiveNs = nowNs }
+        if let last = lastActiveNs {
+            let idle = max(0, (nowNs - last) / 1e9)
+            s.aneIdleS = idle
+            let running = s.aneState.isEmpty || s.aneState.contains("running")
+            if let off = chipModel?.powerOffS, !active, running, idle < off { s.anePowerOffInS = off - idle }
+        }
+        if let h = s.hostCPUW {
+            if !active && (s.aneIdleS ?? 99) > 2 {
+                idleHostW.append(h)
+                if idleHostW.count > 8 { idleHostW.removeFirst() }
+            }
+            if idleHostW.count >= 3 { s.hostCPUExtraW = max(0, h - idleHostW.sorted()[idleHostW.count / 2]) }
+        }
+    }
+
     /// Tells an idle ANE apart from one whose task events this chip or OS does
     /// not produce, using IOReport as an independent witness.
     private func classify(_ s: inout Snapshot) {
@@ -274,5 +393,6 @@ final class Monitor {
         trace?.stop()
         power?.stop()
         rail?.stop()
+        memoryRails.forEach { $0.stop() }
     }
 }
