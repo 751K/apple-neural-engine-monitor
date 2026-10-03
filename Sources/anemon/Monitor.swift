@@ -180,9 +180,10 @@ final class Monitor {
     /// (W, PP0b rail estimate, median of the steady phase, the larger of the
     /// INT8 5x5 peak-compute load and the INT8 3x3 stack; random inputs) and
     /// read bandwidth (GB/s, weight bytes of an FP16 GEMV per evaluation).
-    /// M4 Mac mini and M6, macOS 27.0.1, `anemon calibrate` on 2026-10-03.
+    /// M4 Mac mini and M6, macOS 27.0.1, `anemon calibrate` on 2026-10-03;
+    /// M5 MacBook Air read bandwidth, macOS 27.0.0, the same day.
     static let maxPowerW: [String: Double] = ["h16g": 12.8, "h18g": 16.2]
-    static let builtinReadGBs: [String: Double] = ["h16g": 65.3, "h18g": 123.8]
+    static let builtinReadGBs: [String: Double] = ["h16g": 65.3, "h17": 69.0, "h18g": 123.8]
     private var observedMaxPowerW = 1.0
     /// This machine's calibration, from `sudo anemon calibrate`.
     let profile: Profile?
