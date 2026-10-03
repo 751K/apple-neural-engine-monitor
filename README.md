@@ -1,229 +1,73 @@
-# Apple Neural Engine Monitor (anemon)
+# Anemon — Apple Neural Engine monitor
 
-A terminal monitor for the Apple Neural Engine (ANE) on Apple Silicon Macs.
-It shows how much of the time the ANE is executing work, which processes are
-using it, how much memory traffic it generates and how much power it draws.
+A terminal monitor for the Apple Neural Engine (ANE) on Apple Silicon Macs:
+how busy it is, which processes use it, how much memory traffic it makes and
+how much power it draws.
+
+![Anemon on an M6 with two processes using both engines](docs/screenshot-m6.png)
+
+## Quick start
 
 ```
 make
-sudo .build/make/anemon calibrate   # once per machine, about 2 min
+sudo .build/make/anemon calibrate   # once per machine, about 2.5 min (optional on M4 / M6)
 sudo .build/make/anemon             # full-screen view, q to quit
-sudo .build/make/anemon --json      # one JSON object per interval
-     .build/make/anemon --json      # without root: DRAM, interrupts and power (M4, M6)
+     .build/make/anemon             # without root: no busy %, tasks or programs
+     .build/make/anemon --json      # one JSON object per interval
 ```
 
 Options: `--interval SECONDS` (default 1), `--count N`, `--no-power`.
 
-`make` builds `anemon` and `anebench`, a small tool that generates convolution
-models and runs them on the ANE; calibration uses it for its test workloads.
+## What the screen shows
 
-## Reading the screen
-
-![anemon on an M6 with two processes using both engines](docs/screenshot-m6.png)
-
-*M6 (two ANEs), `sudo anemon`, two `anebench` processes running at once: an
-FP16 3×3 conv stack (3.1 ms per task) and an INT8 one (0.4 ms per task).*
-
-| Line | What it says here |
-|---|---|
-| `ANE0 busy`, `ANE1 busy` | Each engine executed tasks 99% of the time: 569 tasks/s, 1.75 ms on average. The bar turns yellow above 50% and red above 85% |
-| `State` | Both engines' firmware is running. When idle, this line counts down to the driver's power-off (5.7 s on M6) |
-| `Throttled` | Shown only while a throttle trigger is active (none here) |
-| `Power` | 16.8 W for the ANE, from the PP0b rail minus the CPU cluster on it. The bar's scale is the calibrated peak or the highest value seen |
-| `Host CPU` | The cores that call the ANE draw 1.27 W, 0.15 W above idle: the host is not the bottleneck. With many small calls this line warns that the CPU, not the ANE, spends the power |
-| `Memory` | 1.4 W on the DRAM rails, for all of memory's clients |
-| `DRAM read`, `DRAM` | ANE traffic: 26.5 GB/s read, 4.1 GB/s written; 2198 interrupts/s. The memory clock sat at its top level (F9) 88% of the time |
-| sparklines | Recent history of busy % and power; the number at the right is the scale, not the current value |
-| `programs` | Per process: share of all engines' time, tasks/s, mean task length and ANE energy per task. The FP16 model takes 88% of the ANE at 26 mJ a task; the INT8 one 11% at 3.4 mJ. A model compiled for both M6 engines runs one task on each per inference |
-
-Without root the busy, tasks and programs lines are missing (they come from
-kernel tracing); state, power, host CPU, memory and DRAM still work.
-
-**A single process rarely keeps the ANE 100% busy.** A synchronous Core ML
-call leaves about 0.3–0.4 ms between tasks for submission and completion; the
-same INT8 model alone, at 0.67 ms per call, keeps each engine about 55% busy.
-Longer tasks, batching, or several processes in parallel fill the gaps.
-
-## What it reports
-
-| Metric | Meaning | Needs root |
+| Line | Meaning | Root |
 |---|---|---|
-| busy % | Share of wall time the ANE was executing a task | yes |
-| tasks/s, ms/task | Completed ANE tasks and their mean duration | yes |
-| programs | Busy time and task rate per compiled model, with the process (name and PID) that submits it | yes |
-| power | ANE power: SMC rail PP0b minus the CPU cluster on the same rail (M4, M6). `powermetrics` (root) only on chips without a known rail: its ANE figure is a model estimate | no |
-| DRAM read/write | ANE traffic to memory | no |
-| interrupts | ANE interrupt rate | no |
-| state | Each engine's firmware processor: running, off or in transition; on M6, the time left until the driver powers the ANE off (5.68 s after the last inference; the next call then pays a firmware boot of about 50 ms) | no |
-| throttled | Share of the interval with an ANE throttle trigger active, and which (SW, HW, ADCLK, DITHER, PPT, EXT0–3) | no |
-| host CPU | Power of the CPU cluster that runs the ANE's callers (IOReport `PACC`; on M6 the 2 Super and 4 Performance cores), and how far it is above its idle level. With many small calls the host, not the ANE, draws most of the power | no |
-| memory | M6: power of the SMC rails that follow DRAM traffic (PP2b + PP4b), for all clients of memory | no |
-| DRAM level | Memory clock level (`DCS_F<n>`) with the most residency; on M6 the top level F9 is 10656 MT/s, 170.5 GB/s peak | no |
-| mJ/task | Per program: ANE energy per task, splitting the interval's ANE energy by each program's busy time | yes (needs busy %) and power |
+| `ANE busy` | Share of time each engine was executing a task; tasks/s and mean ms/task | yes |
+| `State` | Each engine running or off; on M6, the countdown to power-off (5.7 s after the last task) | no |
+| `Throttled` | Shown while a throttle trigger is active | no |
+| `Power` | ANE power from the SMC rail PP0b minus the CPU cluster on the same rail (M4, M6) | no |
+| `Host CPU` | Power of the cores that call the ANE; warns when they draw more than the ANE (many small calls) | no |
+| `Memory` | M6: power of the DRAM rails, for all of memory's clients | no |
+| `DRAM` | ANE read/write traffic, interrupts, and the memory clock level | no |
+| `programs` | Per process: share of the ANE, tasks/s, ms/task and energy per task (mJ) | yes |
 
-**busy % is time occupancy, not compute utilization.** Like the GPU "active"
-figure, it says whether the ANE had work, not how much of its arithmetic was
-in use. A metric that is unavailable on a chip is reported as null, never as 0.
+**busy % is time occupancy, not compute utilization**, and not speed either:
+macOS lowers the ANE clock when the caller leaves gaps between requests. A
+single process calling a model synchronously rarely keeps the ANE 100% busy
+(about 0.3–0.4 ms of submit/complete overhead per call); longer tasks,
+batching or several processes fill the gaps, as in the screenshot.
 
-**busy % does not tell how fast the ANE runs.** macOS (CLPC) sets the ANE
-clock from its utilization and aims for about 77% busy: when the caller
-leaves gaps between requests it lowers the clock until the ANE is busy about
-77% of the time again (on M6, down to 852 MHz from 2.58 GHz, about 2.8× slower
-per task). A single process calling a model synchronously already leaves
-about 0.4 ms between tasks, so 75–80% busy is typical both at full clock and
-at the lowest one. Rising ms/task at the same busy % is the sign of a lower
-clock.
+After the Mac has slept, busy % comes from driver events until the next
+reboot and is less precise; reboot first on a benchmark machine.
 
 ## Supported chips
 
-| | M4 | M5 | M6 (macOS 27.0.1) |
+| | M4 | M5 | M6 |
 |---|---|---|---|
-| busy %, tasks, programs | validated | driver events only (no firmware task events); right for short tasks, the busy check failed once (see Limitations) | busy check passed |
-| DRAM | exact | histogram; lower bound above 32 GB/s | lower bound at full speed |
-| interrupts | yes | no | yes |
-| power | PP0b rail (within about 10% of `powermetrics`) | `powermetrics` (root) | PP0b rail |
+| busy %, programs | ✓ | driver events only | ✓ (both engines) |
+| DRAM | exact | lower bound above 32 GB/s | lower bound at full speed |
+| power | ✓ | `powermetrics` (root) | ✓ |
 
-On M4, DRAM works with SIP enabled and without root.
-
-**After the Mac has slept, busy % is less precise until the next reboot.**
-macOS stops delivering the ANE's own task events after sleep, and anemon falls
-back to the driver's events: busy % stays within about 1.5 points, but on M6
-tasks/s doubles and the two engines can no longer be told apart. JSON reports
-`slept_since_boot_s`. On a benchmark machine, disable sleep or reboot first.
-
-Other chips: run `sudo anemon calibrate` to check busy %. DRAM and power stay
-null until a chip has been characterized. These are private macOS interfaces
-and may change between releases.
-
-## JSON output
-
-Each line is one interval. Besides the metrics above:
-
-| Field | Values |
-|---|---|
-| `ane_busy_source` | `firmware` (ANE task events), `host` (driver events, includes queueing) or `none` |
-| `ane_busy_status` | `measured`, `idle`, `unverified` or `unsupported` (ANE active but no task events; `ane_busy_pct` is then null) |
-| `programs` | Up to 16 entries: `handle`, `pid`, `process`, `tasks`, `busy_ms` |
-| `ane_power_source` | `powermetrics` or `smc_estimate` |
-| `dram_source` | `amc` (byte counters) or `histogram` |
-| `dram_clipped_pct` | Share of samples at the top of the histogram range; above 10% the reading is a lower bound |
-| `slept_since_boot_s` | Time the Mac has slept since boot |
-| `validated` | The busy check has passed for this chip and macOS major version |
-| `calibrated` | A calibration profile exists for this machine |
-| `host_cpu_power_w`, `host_cpu_extra_w` | CPU cluster power and its excess over idle |
-| `memory_power_w` | Memory rail power (M6) |
-| `ane_state` | Per engine: `running`, `off` or `transition` |
-| `ane_idle_s`, `ane_power_off_in_s` | Seconds since the last ANE activity; seconds until power-off (M6) |
-| `ane_throttle_pct`, `ane_throttle_kinds` | Throttled share of the interval and the active triggers |
-| `dram_level`, `dram_level_pct`, `dram_peak_gbs` | Dominant memory clock level, its share, and its peak bandwidth where known |
-| `programs[].energy_mj_per_task` | ANE energy per task for that program |
+Tested on macOS 27.0.1. These are private macOS interfaces and may change
+between releases. On other chips, `sudo anemon calibrate` checks busy %;
+DRAM and power stay empty until the chip has been characterized.
 
 ## Calibration
 
-`sudo anemon calibrate` runs reference workloads for about two minutes (close
-other ANE and GPU work first). It measures idle ANE power, peak INT8
-throughput and read bandwidth, and checks busy % against the host at 100% and
-50% duty; the check passes within 5 points. Peak power is the larger of two
-loads, because the highest-compute load is not the highest-power one: the
-INT8 5×5 stack used for peak throughput, and a stack of smaller INT8 3×3
-convolutions (on M6 about 9–13 W and 16 W). The busy check uses tasks of at
-least 20 ms, so that the host's submit/complete overhead per call (up to
-0.6 ms on M6) stays near 2–3%. The profile is saved to
-`/Library/Application Support/anemon/<architecture>.json` and sets the scale of
-the power and DRAM bars. M4 and M6 have built-in values from a reference
-calibration, used when the machine has no profile of its own.
-
-## Validation
-
-### M4
-
-busy % against the share of wall time spent in the ANE on the host:
-
-| Workload | Host | anemon |
-|---|---|---|
-| idle | 0% | 0.0% |
-| 10 ms tasks, continuous | 100% | 98.3–98.8% |
-| 10 ms tasks, 50% duty | 51.4% | 50.9% |
-| 10 ms tasks, 25% duty | 26.7% | 26.8% |
-| 42 ms tasks, continuous | 100% | 99.5% |
-| 5–8 ms tasks, 50% duty | 53.8% | 51.1% |
-| 18.6 ms tasks, 50% duty (macOS 27.0.1) | 53.9% | 54.4% |
-| 10.7 ms tasks, 50% duty, after sleep | 50.8% | 51.1% |
-
-- Two processes sharing the ANE: 100% busy, no task events lost, each attributed to its own PID.
-- Peak INT8 throughput 35–38 TOPS across runs (theoretical 38.4).
-- Power with random inputs, PP0b rail (median, `anemon calibrate`): 12.8 W on
-  the INT8 3×3 stack, 11.3 W at full INT8 throughput (38 TOPS, 5×5 stack;
-  `powermetrics` reads 12.9–13.1 W there). On an
-  FP16 3×3 conv chain the rail gives about 9.5 W against 9.6 W from
-  `powermetrics`. Measured earlier with all-zero inputs (powermetrics): 0.66 W
-  with tiny tasks, 2.1–2.6 W for FP16 convolutions, 3.4–4.1 W for INT8.
-- Read bandwidth 64.6–66 GB/s, matching the weight traffic of the test GEMV.
-  The 2026-10-03 calibration (12.8 W, 65.3 GB/s, busy check 98.2 / 50.5%)
-  is built in for M4 machines without their own calibration.
-- A MacBook Air M4 with SIP enabled gave the same results.
-
-### M6
-
-| Workload | Host | anemon |
-|---|---|---|
-| 10.3 ms tasks, continuous | 100% | 96.5% |
-| 10.3 ms tasks, 50% duty | 48.8% | 48.3% |
-| two processes, 3.9 ms tasks | 100% | 99.9–100% |
-
-- Two processes: task events lost dropped from about 10% to 0.1%, and each program was attributed to its PID.
-- Peak throughput with random inputs: INT8 85–91 TOPS, FP16 50 TOPS (eight
-  chained 3×3 convs, 512 channels). With all-zero inputs the same models run
-  10–20% faster (106 and 55 TOPS); the M4 shows no such difference.
-- DRAM against the weight traffic of an FP16 GEMV:
-
-| Duty | Weight traffic | anemon |
-|---:|---:|---:|
-| 100% | 133.5 GB/s | 115 GB/s (lower bound) |
-| 50% | 59.8 GB/s | 50–55 GB/s |
-| 25% | 28.1 GB/s | 25 GB/s |
-
-- `anemon calibrate` (2026-10-03, random inputs): peak compute 71–73 TOPS
-  INT8; peak power 16.2–16.4 W on the INT8 3×3 stack (the 5×5 peak-compute
-  load read 8.9–13.3 W across three runs), with brief ADCLK and DITHER
-  throttling; read bandwidth 123.8 GB/s; busy check 96.6 / 48.3% against
-  100 / 50.9%. These values are built in for M6 machines without a
-  calibration. The 5×5 calibration load with
-  all-zero inputs reads about 5 W. Readings return to 0 within two seconds.
-  Generating text with a
-  4B language model (Core ML, 85% busy, 74 GB/s read) read 2.4 W, while the
-  whole machine drew 12.3 W. For a real model there is no independent ANE
-  reading to check this against.
+`sudo anemon calibrate` runs reference loads (close other ANE and GPU work
+first): idle and peak power, peak INT8 throughput, read bandwidth, and a
+check of busy % against known duty cycles. It sets the scale of the power and
+DRAM bars; M4 and M6 have built-in values for machines without their own.
 
 ## Limitations
 
-- While anemon runs, Instruments, `ktrace` and `fs_usage` cannot trace, and
-  anemon cannot start while one of them is tracing.
+- While anemon runs, Instruments, `ktrace` and `fs_usage` cannot trace.
 - Programs are shown by process, not by model name.
-- Compute utilization is not available: the ANE's performance counters go only
-  to the process that submitted the work, and even root cannot read them for
-  other processes.
-- On M6, Core ML runs a model compiled for two engines on both in lockstep;
-  a single-engine model runs on ANE0, and one compiled program is executed
-  serially within a process. Different models or processes can occupy both
-  engines (about 1.8× the throughput). anemon's per-engine busy % has not
-  been checked against separate workloads on the two engines.
-- The power estimate subtracts the CPU cluster that shares PP0b. With only
-  the cores that call the ANE busy, the error is within about 0.3 W; when
-  other threads keep the Performance cores busy too, the baseline shifts by
-  up to about 1 W (TUI note when the cluster reads above 10 W).
-- M5: one calibration ran the ANE at half speed (15 instead of 28 TOPS) and
-  read 64% busy at 100% duty. The likely cause is throttling of the fanless
-  machine after the peak load (the driver throttles by holding requests,
-  which driver events count as idle); not yet confirmed.
+- Compute utilization is not available: the ANE's performance counters go
+  only to the process that submitted the work.
 
-## Repository
-
-- `Sources/anemon`: the monitor (Swift).
-- `Sources/CANEMon`: kdebug, IOReport and SMC readers (C).
-- `Sources/anebench`, `Sources/CANERun`: the workload generator and runner.
-- [`calibration/`](calibration/): how each metric is read, and the
-  measurements and scripts behind it.
+Details — how each metric is read, JSON fields, validation data, and notes on
+M6 and M5 — are in [`calibration/README.md`](calibration/README.md).
 
 ## License
 
