@@ -15,6 +15,9 @@ struct Snapshot {
     var busyStatus = BusyStatus.unverified
     var time = Date()
     var intervalS = 1.0
+    /// Length of the kdebug window the busy figures cover (s). The loop sleeps
+    /// for the nominal interval, then spends time sampling, so it runs longer.
+    var spanS = 1.0
     var busyPct: [Double] = []          // per ANE device
     var tasksPerS: [Double] = []
     var avgTaskMs: [Double?] = []
@@ -73,7 +76,7 @@ extension Snapshot {
         guard let w = powerW, w > 0, p.tasks > 0 else { return nil }
         let busy = programs.reduce(0) { $0 + $1.busyNs }
         guard busy > 0 else { return nil }
-        return w * intervalS * (p.busyNs / busy) / Double(p.tasks) * 1000
+        return w * spanS * (p.busyNs / busy) / Double(p.tasks) * 1000
     }
 }
 
@@ -205,6 +208,7 @@ final class Monitor {
         let from = lastTo
         lastTo = to
         let span = max(to - from, 1)
+        s.spanS = span / 1e9
         if let trace {
             let w = trace.window(from: from, to: to)
             s.busySource = w.source
