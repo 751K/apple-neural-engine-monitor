@@ -97,6 +97,11 @@ DRAM bars; M4 and M6 have built-in values for machines without their own.
 How each metric is read, how it was validated on each chip, and the JSON
 fields are in [`calibration/README.md`](calibration/README.md).
 
+## Contributors
+
+- [zhouxihao666](https://github.com/zhouxihao666): M5 testing and
+  calibration data
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
