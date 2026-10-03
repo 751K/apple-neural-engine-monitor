@@ -57,9 +57,28 @@ reboot and is less precise; reboot first on a benchmark machine.
 | DRAM | exact | lower bound above 32 GB/s | lower bound at full speed |
 | power | ✓ | ✓ | ✓ |
 
-Tested on macOS 27.0.1. These are private macOS interfaces and may change
+Tested on macOS 27.0.0 and 27.0.1. These are private macOS interfaces and may change
 between releases. On other chips, `sudo anemon calibrate` checks busy %;
 DRAM and power stay empty until the chip has been characterized.
+
+## Benchmarks
+
+ANE figures measured with `anemon calibrate` and `anemon diagnose`:
+
+| | M4 | M5 | M6 |
+|---|---|---|---|
+| ANE | 16 cores | 16 cores | 2 × 16 cores |
+| macOS | 27.0.1 | 27.0.0 | 27.0.1 |
+| INT8, 5×5 conv stack | 37.7 TOPS | 30.9 TOPS | 71.2 TOPS |
+| INT8, 3×3 conv stack | 31.7 TOPS | 38.2 TOPS | – |
+| DRAM read (FP16 GEMV) | 65.3 GB/s | 71.3 GB/s | 123.7 GB/s |
+| Peak ANE power | 12.8 W | 6.2 W ¹ | 16.2 W |
+| busy % at 100 / 50% duty | 98.2 / 50.5% (host 100 / 50.6) | 99 / 50–54% (host 100 / 52.2) | 96.6 / 48.3% (host 100 / 50.9) |
+
+TOPS count the model's nominal multiply-adds per second at batch 1; the
+compiler maps kernel sizes differently on each chip, so no single load shows
+every chip's peak. DRAM read is the weight bytes the GEMV streams per second.
+¹ From one `anemon diagnose` run (PP0b estimate), not a calibration.
 
 ## Calibration
 
