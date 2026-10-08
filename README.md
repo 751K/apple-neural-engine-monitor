@@ -99,6 +99,18 @@ DRAM bars; M4 and M6 have built-in values for machines without their own.
 How each metric is read, how it was validated on each chip, and the JSON
 fields are in [`calibration/README.md`](calibration/README.md).
 
+## Research
+
+Anemon was built alongside a study of the M6's Neural Engine: its program
+format, on-chip memory, clocks and power, the two engines and how the host
+drives them. The study explains much of what anemon shows, for example why
+the ANE's power has to be read from a rail it shares with the CPU, and why
+its clock follows the host's call rate. Read the report online in
+[English](https://751k.github.io/Apple-Neural-Engine-Microarchitecture-Study-M6/en/)
+or [Chinese](https://751k.github.io/Apple-Neural-Engine-Microarchitecture-Study-M6/).
+Its tools, raw data and analysis scripts are in
+[751K/Apple-Neural-Engine-Microarchitecture-Study-M6](https://github.com/751K/Apple-Neural-Engine-Microarchitecture-Study-M6).
+
 ## Contributors
 
 - [zhouxihao666](https://github.com/zhouxihao666): M5 testing and
